@@ -1,0 +1,24 @@
+# 本地开发配置 - 请勿提交到 Git
+nanobot:
+  llm:
+    default-model: deepseek
+    models:
+      deepseek:
+        enabled: true
+        provider: openai-compatible
+        base-url: https://api.deepseek.com/v1
+        api-key: sk-your-deepseek-key-here  # 替换为你的真实 API Key
+        model: deepseek-chat
+        temperature: 0.7
+        max-tokens: 4096
+        timeout-ms: 30000
+      
+      kimi:
+        enabled: true
+        provider: openai-compatible
+        base-url: https://api.moonshot.cn/v1
+        api-key: sk-your-kimi-key-here  # 替换为你的真实 API Key
+        model: moonshot-v1-8k
+        temperature: 0.7
+        max-tokens: 8000
+        timeout-ms: 30000
