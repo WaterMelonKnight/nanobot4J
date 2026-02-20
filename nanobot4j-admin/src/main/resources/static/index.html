@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nanobot4J Admin Console</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f5f7fa;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .main-container {
+            margin-top: 20px;
+            height: calc(100vh - 140px);
+        }
+        .instance-list {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            height: 100%;
+            overflow-y: auto;
+        }
+        .instance-item {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .instance-item:hover {
+            background-color: #f8f9fa;
+        }
+        .instance-item.active {
+            background-color: #e7f3ff;
+            border-left: 3px solid #667eea;
+        }
+        .instance-item:last-child {
+            border-bottom: none;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-online {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status-offline {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .tool-detail {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            height: 100%;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        .tool-card {
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+            transition: box-shadow 0.2s;
+        }
+        .tool-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .tool-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 8px;
+        }
+        .tool-description {
+            color: #6c757d;
+            margin-bottom: 10px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+        }
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        .refresh-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .refresh-btn:hover {
+            transform: scale(1.1);
+        }
+        .refresh-btn:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1 class="mb-0">🤖 Nanobot4J Admin Console</h1>
+            <p class="mb-0 mt-2">Service Registry & Tool Management</p>
+        </div>
+    </div>
+
+    <div class="container main-container">
+        <div class="row h-100">
+            <!-- Left Panel: Instance List -->
+            <div class="col-md-4">
+                <div class="instance-list">
+                    <div class="p-3 border-bottom">
+                        <h5 class="mb-0">Service Instances</h5>
+                        <small class="text-muted">Total: <span id="totalCount">0</span> | Online: <span id="onlineCount">0</span></small>
+                    </div>
+                    <div id="instanceList">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📭</div>
+                            <p>No instances registered yet</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Tool Details -->
+            <div class="col-md-8">
+                <div class="tool-detail">
+                    <div id="toolDetail">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">👈</div>
+                            <p>Select an instance to view its tools</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadInstances()" title="Refresh">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+        </svg>
+    </button>
+
+    <script>
+        let selectedInstanceId = null;
+
+        // Load instances on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadInstances();
+            // Auto refresh every 10 seconds
+            setInterval(loadInstances, 10000);
+        });
+
+        // Load all instances
+        async function loadInstances() {
+            try {
+                const response = await fetch('/api/registry/instances');
+                const result = await response.json();
+
+                if (result.success) {
+                    const instances = result.data;
+                    displayInstances(instances);
+                    updateCounts(instances);
+                }
+            } catch (error) {
+                console.error('Failed to load instances:', error);
+            }
+        }
+
+        // Display instances in the list
+        function displayInstances(instances) {
+            const listContainer = document.getElementById('instanceList');
+
+            if (instances.length === 0) {
+                listContainer.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <p>No instances registered yet</p>
+                    </div>
+                `;
+                return;
+            }
+
+            listContainer.innerHTML = instances.map(instance => `
+                <div class="instance-item ${instance.instanceId === selectedInstanceId ? 'active' : ''}"
+                     onclick="selectInstance('${instance.instanceId}')">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <strong>${instance.serviceName || 'Unknown Service'}</strong>
+                            <br>
+                            <small class="text-muted">${instance.address}</small>
+                            <br>
+                            <small class="text-muted">ID: ${instance.instanceId}</small>
+                        </div>
+                        <span class="status-badge status-${instance.status.toLowerCase()}">
+                            ${instance.status}
+                        </span>
+                    </div>
+                    <div class="mt-2">
+                        <small class="text-muted">
+                            Tools: ${instance.tools ? instance.tools.length : 0} |
+                            Uptime: ${formatUptime(instance.registerTime)}
+                        </small>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Update instance counts
+        function updateCounts(instances) {
+            document.getElementById('totalCount').textContent = instances.length;
+            document.getElementById('onlineCount').textContent =
+                instances.filter(i => i.status === 'ONLINE').length;
+        }
+
+        // Select an instance and show its tools
+        async function selectInstance(instanceId) {
+            selectedInstanceId = instanceId;
+
+            // Reload to update active state
+            await loadInstances();
+
+            // Find the selected instance
+            const response = await fetch('/api/registry/instances');
+            const result = await response.json();
+            const instance = result.data.find(i => i.instanceId === instanceId);
+
+            if (instance) {
+                displayTools(instance);
+            }
+        }
+
+        // Display tools for selected instance
+        function displayTools(instance) {
+            const detailContainer = document.getElementById('toolDetail');
+
+            if (!instance.tools || instance.tools.length === 0) {
+                detailContainer.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🔧</div>
+                        <p>No tools registered for this instance</p>
+                    </div>
+                `;
+                return;
+            }
+
+            detailContainer.innerHTML = `
+                <h4 class="mb-4">Tools for ${instance.serviceName}</h4>
+                ${instance.tools.map(tool => `
+                    <div class="tool-card">
+                        <div class="tool-name">${tool.name}</div>
+                        <div class="tool-description">${tool.description}</div>
+                        <details>
+                            <summary class="text-muted" style="cursor: pointer;">Parameter Schema</summary>
+                            <pre class="mt-2 p-2 bg-light rounded"><code>${JSON.stringify(JSON.parse(tool.parameterSchema || '{}'), null, 2)}</code></pre>
+                        </details>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        // Format uptime
+        function formatUptime(registerTime) {
+            if (!registerTime) return 'N/A';
+            const seconds = Math.floor((Date.now() - registerTime) / 1000);
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${hours}h`;
+            const days = Math.floor(hours / 24);
+            return `${days}d`;
+        }
+    </script>
+</body>
+</html>

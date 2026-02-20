@@ -1,0 +1,18 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: nanobot4j-example
+
+# Nanobot4J 配置
+nanobot:
+  admin:
+    enabled: true
+    url: http://localhost:8080
+    heartbeat-interval: 30
+
+logging:
+  level:
+    com.nanobot: DEBUG
+    root: INFO
