@@ -17,6 +17,11 @@ public class ServiceInstance {
     private String instanceId;
 
     /**
+     * 服务名称
+     */
+    private String serviceName;
+
+    /**
      * 实例地址
      */
     private String address;

@@ -9,7 +9,7 @@ spring:
 nanobot:
   admin:
     enabled: true
-    url: http://localhost:8080
+    address: http://localhost:8080
     heartbeat-interval: 30
 
 logging:
