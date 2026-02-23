@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 public class EnhancedAgentService {
 
     private final InstanceRegistry instanceRegistry;
+    private final RemoteToolExecutor remoteToolExecutor;
 
     /**
      * 处理用户消息，支持多步骤工具调用
@@ -229,65 +230,11 @@ public class EnhancedAgentService {
     }
 
     /**
-     * 调用工具
+     * 调用工具 - 通过远程 RPC 调用
      */
     private String invokeTool(ToolInfo tool, Map<String, Object> params) {
-        log.info("Invoking tool: {} with params: {}", tool.name, params);
-
-        if ("calculator".equals(tool.name)) {
-            return invokeCalculator(params);
-        } else if ("weather".equals(tool.name)) {
-            return invokeWeather(params);
-        } else if ("time".equals(tool.name)) {
-            return invokeTime(params);
-        }
-
-        return "工具调用失败";
-    }
-
-    private String invokeCalculator(Map<String, Object> params) {
-        String op = (String) params.get("operation");
-        Object aObj = params.get("a");
-        Object bObj = params.get("b");
-
-        if (op == null || aObj == null || bObj == null) {
-            return "参数不完整";
-        }
-
-        double a = convertToDouble(aObj);
-        double b = convertToDouble(bObj);
-
-        double result = switch (op) {
-            case "add" -> a + b;
-            case "subtract" -> a - b;
-            case "multiply" -> a * b;
-            case "divide" -> b != 0 ? a / b : Double.NaN;
-            default -> 0;
-        };
-
-        if (Double.isNaN(result)) {
-            return "错误：除数不能为零";
-        }
-
-        return String.format("%.1f", result);
-    }
-
-    private String invokeWeather(Map<String, Object> params) {
-        String city = (String) params.getOrDefault("city", "北京");
-        // 模拟不同城市的温度
-        int temp = switch (city) {
-            case "上海" -> 25;
-            case "杭州" -> 23;
-            case "北京" -> 22;
-            case "深圳" -> 28;
-            case "广州" -> 27;
-            default -> 20;
-        };
-        return city + "气温：" + temp + "°C";
-    }
-
-    private String invokeTime(Map<String, Object> params) {
-        return "当前时间：" + new Date();
+        log.info("Invoking remote tool: {} with params: {}", tool.name, params);
+        return remoteToolExecutor.executeRemoteTool(tool.name, params);
     }
 
     // ========== 辅助方法 ==========

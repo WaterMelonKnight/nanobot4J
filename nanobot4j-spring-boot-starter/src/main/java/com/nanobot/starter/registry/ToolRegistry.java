@@ -53,6 +53,28 @@ public class ToolRegistry {
     }
 
     /**
+     * 执行工具
+     * @param toolName 工具名称
+     * @param params 参数
+     * @return 执行结果
+     */
+    public ToolResult executeTool(String toolName, Map<String, Object> params) {
+        ToolDefinition toolDef = tools.get(toolName);
+        if (toolDef == null) {
+            log.error("Tool not found: {}", toolName);
+            return ToolResult.failure("Tool not found: " + toolName);
+        }
+
+        Tool tool = toolDef.getTool();
+        if (tool == null) {
+            log.error("Tool implementation not found: {}", toolName);
+            return ToolResult.failure("Tool implementation not found: " + toolName);
+        }
+
+        return tool.execute(params);
+    }
+
+    /**
      * 方法工具 - 将 Spring Bean 的方法包装为 Tool
      */
     @Slf4j

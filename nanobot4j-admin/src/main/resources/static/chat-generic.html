@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>泛型 ReAct Agent - 实时对话</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .status-bar {
+            background: #f8f9fa;
+            padding: 12px 30px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #6c757d;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            text-align: right;
+        }
+
+        .message-content {
+            display: inline-block;
+            max-width: 70%;
+            padding: 15px 20px;
+            border-radius: 18px;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message.agent .message-content {
+            background: white;
+            color: #333;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            text-align: left;
+        }
+
+        .thought-item {
+            padding: 10px 15px;
+            margin: 8px 0;
+            background: #f8f9fa;
+            border-left: 3px solid #667eea;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #495057;
+        }
+
+        .tool-call {
+            background: #e7f3ff;
+            border-left-color: #0066cc;
+        }
+
+        .tool-result {
+            background: #e8f5e9;
+            border-left-color: #28a745;
+        }
+
+        .final-answer {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+            font-weight: 500;
+        }
+
+        .input-container {
+            padding: 20px 30px;
+            background: white;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+        }
+
+        #userInput {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        #userInput:focus {
+            border-color: #667eea;
+        }
+
+        #sendBtn {
+            padding: 15px 35px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #sendBtn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        #sendBtn:active {
+            transform: translateY(0);
+        }
+
+        #sendBtn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .tools-list {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 12px;
+        }
+
+        .tool-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 4px;
+            background: #667eea;
+            color: white;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 泛型 ReAct Agent</h1>
+            <p>基于 DeepSeek 的智能对话系统 - 零硬编码 · 动态工具发现</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-dot"></span>
+                <span>LLM: DeepSeek</span>
+            </div>
+            <div class="status-item">
+                <span id="toolCount">可用工具: 加载中...</span>
+            </div>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <div class="message agent">
+                <div class="message-content">
+                    <strong>👋 你好！我是泛型 ReAct Agent</strong><br><br>
+                    我可以动态调用任何在线工具来帮助你。试试问我：<br>
+                    • "上海的天气怎么样？"<br>
+                    • "现在几点了？"<br>
+                    • "帮我计算 50 乘以 3"
+                </div>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <input type="text" id="userInput" placeholder="输入你的问题..." />
+                <button id="sendBtn" onclick="sendMessage()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let availableTools = [];
+
+        // 页面加载时获取可用工具
+        window.onload = async function() {
+            try {
+                const response = await fetch('/api/registry/instances');
+                const data = await response.json();
+                if (data.success && data.data.length > 0) {
+                    const tools = data.data[0].tools || [];
+                    availableTools = tools;
+                    document.getElementById('toolCount').textContent =
+                        `可用工具: ${tools.length} 个`;
+                }
+            } catch (error) {
+                console.error('获取工具列表失败:', error);
+            }
+        };
+
+        // 发送消息
+        async function sendMessage() {
+            const input = document.getElementById('userInput');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            // 显示用户消息
+            addMessage('user', message);
+            input.value = '';
+
+            // 禁用发送按钮
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<span class="loading"></span>';
+
+            try {
+                const response = await fetch('/api/agent/generic/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                const data = await response.json();
+                displayAgentResponse(data);
+
+            } catch (error) {
+                addMessage('agent', '❌ 抱歉，发生了错误：' + error.message);
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = '发送';
+            }
+        }
+
+        // 显示Agent响应
+        function displayAgentResponse(data) {
+            const container = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message agent';
+
+            let content = '<div class="message-content">';
+
+            // 显示思考过程
+            if (data.thoughts && data.thoughts.length > 0) {
+                content += '<strong>💭 思考过程：</strong><br>';
+                data.thoughts.forEach(thought => {
+                    let className = 'thought-item';
+                    if (thought.includes('TOOL_CALL')) {
+                        className += ' tool-call';
+                    } else if (thought.includes('工具返回')) {
+                        className += ' tool-result';
+                    } else if (thought.includes('FINAL_ANSWER')) {
+                        className += ' final-answer';
+                    }
+                    content += `<div class="${className}">${escapeHtml(thought)}</div>`;
+                });
+            }
+
+            // 显示最终答案
+            if (data.finalAnswer) {
+                content += '<br><strong>✨ 最终答案：</strong><br>';
+                content += `<div style="padding: 15px; background: #f0f8ff; border-radius: 8px; margin-top: 10px;">${escapeHtml(data.finalAnswer)}</div>`;
+            }
+
+            // 显示使用的工具
+            if (data.toolCalls && data.toolCalls.length > 0) {
+                content += '<br><strong>🔧 调用的工具：</strong><br>';
+                content += '<div class="tools-list">';
+                data.toolCalls.forEach(call => {
+                    content += `<span class="tool-badge">${call.tool}</span>`;
+                });
+                content += '</div>';
+            }
+
+            content += '</div>';
+            messageDiv.innerHTML = content;
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 添加消息
+        function addMessage(type, text) {
+            const container = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // HTML转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML.replace(/\n/g, '<br>');
+        }
+
+        // 回车发送
+        document.getElementById('userInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>

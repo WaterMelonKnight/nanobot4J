@@ -1,5 +1,6 @@
 package com.nanobot.starter.autoconfigure;
 
+import com.nanobot.starter.controller.NanobotClientController;
 import com.nanobot.starter.registry.AdminReporter;
 import com.nanobot.starter.registry.ToolRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -33,5 +34,11 @@ public class NanobotAutoConfiguration {
     public AdminReporter adminReporter(NanobotProperties properties, ToolRegistry toolRegistry) {
         log.info("Initializing AdminReporter with address: {}", properties.getAdmin().getAddress());
         return new AdminReporter(properties, toolRegistry);
+    }
+
+    @Bean
+    public NanobotClientController nanobotClientController(ToolRegistry toolRegistry) {
+        log.info("Initializing NanobotClientController");
+        return new NanobotClientController(toolRegistry);
     }
 }

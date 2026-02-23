@@ -1,163 +1,110 @@
-# Nanobot4J 快速启动指南
+# 🚀 Nanobot4J 泛型 ReAct Agent - 快速启动指南
 
-## 🚀 项目已成功重构为多模块架构
+## 📋 概述
 
-### 项目结构
+本项目实现了一个**完全泛型化、零硬编码**的 ReAct Agent 系统，支持：
+- ✅ 真实 LLM 调用（DeepSeek/Kimi）
+- ✅ 动态工具发现
+- ✅ 完整的 ReAct 循环（思考→行动→观察→回答）
+- ✅ 美观的 Web 界面
 
-```
-nanobot4J/
-├── nanobot4j-core/                 # 核心 SDK（无 Spring 依赖）
-├── nanobot4j-spring-boot-starter/  # Spring Boot 自动装配
-├── nanobot4j-admin/                # 管理控制台
-└── nanobot4j-example/              # 示例应用
-```
+---
 
-## 📦 构建项目
+## 🔧 前置准备
 
-```bash
-cd /workspace/nanobot4J
-mvn -f pom-parent.xml clean install -DskipTests
-```
+### 1. 配置 API Key
 
-## 🎯 启动服务
-
-### 1. 启动 Admin 控制台（端口 8080）
+在项目根目录创建 `.env` 文件：
 
 ```bash
+# DeepSeek API Key
+DEEPSEEK_API_KEY="your-deepseek-api-key"
+
+# Kimi (Moonshot) API Key
+KIMI_API_KEY="your-kimi-api-key"
+```
+
+### 2. 系统要求
+
+- Java 17+
+- Maven 3.6+
+- 端口 8080 和 8081 可用
+
+---
+
+## 🚀 快速启动
+
+### 方式一：使用启动脚本（推荐）
+
+```bash
+# 启动所有服务
+./start-generic.sh
+
+# 停止所有服务
+./stop.sh
+```
+
+### 方式二：手动启动
+
+```bash
+# 1. 加载环境变量
+export $(cat .env | grep -v '^#' | xargs)
+
+# 2. 构建项目
+mvn clean install -DskipTests -f pom-parent.xml
+
+# 3. 启动 Admin 服务
 cd nanobot4j-admin
-mvn spring-boot:run
-```
+mvn spring-boot:run &
 
-### 2. 启动示例应用（端口 8081）
-
-```bash
-cd nanobot4j-example
-mvn spring-boot:run
-```
-
-## 🌐 访问 Dashboard
-
-打开浏览器访问：**http://localhost:8080**
-
-你将看到：
-- 左侧：已注册的服务实例列表
-- 右侧：选中实例的工具详情
-
-## 📊 API 接口
-
-### 查询所有实例
-```bash
-curl http://localhost:8080/api/registry/instances
-```
-
-### 查询在线实例
-```bash
-curl http://localhost:8080/api/registry/instances/online
-```
-
-## 🔧 在你的项目中使用
-
-### 1. 添加依赖
-
-```xml
-<dependency>
-    <groupId>com.nanobot</groupId>
-    <artifactId>nanobot4j-spring-boot-starter</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-</dependency>
-```
-
-### 2. 配置 application.yml
-
-```yaml
-server:
-  port: 8081
-
-spring:
-  application:
-    name: my-service
-
-nanobot:
-  admin:
-    enabled: true
-    address: http://localhost:8080
-    heartbeat-interval: 30
-```
-
-### 3. 创建工具
-
-```java
-@Component
-public class MyTools {
-
-    @NanobotTool(
-        name = "my_tool",
-        description = "我的工具描述",
-        parameterSchema = """
-            {
-              "type": "object",
-              "properties": {
-                "param1": {"type": "string", "description": "参数1"}
-              },
-              "required": ["param1"]
-            }
-            """
-    )
-    public String myTool(Map<String, Object> params) {
-        String param1 = (String) params.get("param1");
-        return "处理结果: " + param1;
-    }
-}
-```
-
-## ✨ 核心特性
-
-1. **自动工具注册** - 使用 @NanobotTool 注解，框架自动扫描并注册
-2. **服务自动发现** - 应用启动时自动注册到 Admin
-3. **心跳检测** - 每 30 秒发送心跳，90 秒无响应标记为 OFFLINE
-4. **可视化管理** - Dashboard 实时显示所有服务和工具
-5. **轻量级设计** - Core 模块无 Spring 依赖，可独立使用
-
-## 🎓 示例工具
-
-示例应用已注册 3 个工具：
-
-1. **calculator** - 数学计算（加减乘除）
-2. **weather** - 天气查询（模拟数据）
-3. **time** - 获取当前系统时间
-
-## 🐛 故障排查
-
-### 服务未注册成功？
-
-1. 检查 Admin 是否启动：`curl http://localhost:8080/api/registry/instances`
-2. 检查配置文件中的 `nanobot.admin.address` 是否正确
-3. 查看应用日志，确认是否有 "Successfully registered to Admin" 消息
-
-### 工具未被发现？
-
-1. 确保类上有 `@Component` 注解
-2. 确保方法上有 `@NanobotTool` 注解
-3. 检查日志中是否有 "Discovered @NanobotTool" 消息
-
-## 📝 注意事项
-
-- Admin 必须先启动，客户端才能注册成功
-- 配置文件中使用 `address` 而不是 `url`
-- Spring Boot 3.x 需要 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件
-
-## 🎉 成功标志
-
-启动成功后，日志中应该看到：
-
-```
-INFO c.n.s.a.NanobotAutoConfiguration : Initializing ToolRegistry
-INFO c.n.s.a.NanobotAutoConfiguration : Initializing ToolScanner
-INFO c.nanobot.starter.registry.ToolRegistry : Registered tool: xxx
-INFO c.n.starter.registry.AdminReporter : Successfully registered to Admin
-INFO c.n.starter.registry.AdminReporter : Heartbeat started with interval: 30 seconds
+# 4. 启动 Client 服务
+cd ../nanobot4j-example
+mvn spring-boot:run &
 ```
 
 ---
 
-**祝你使用愉快！** 🚀
+## 🌐 访问服务
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| **泛型 Agent 对话页面** | http://localhost:8080/chat-generic.html | 🎨 推荐 |
+| Admin Dashboard | http://localhost:8080 | 管理控制台 |
+| Client 应用 | http://localhost:8081 | 工具提供方 |
+
+---
+
+## 💬 使用示例
+
+打开 http://localhost:8080/chat-generic.html，尝试：
+
+1. **天气查询**: "上海的天气怎么样？"
+2. **时间查询**: "现在几点了？"
+3. **数学计算**: "帮我计算 50 乘以 3"
+
+---
+
+## 🔍 查看日志
+
+```bash
+# Admin 服务日志
+tail -f /tmp/admin.log
+
+# Client 服务日志
+tail -f /tmp/client.log
+```
+
+---
+
+## 🛑 停止服务
+
+```bash
+./stop.sh
+```
+
+---
+
+## 📚 更多文档
+
+- [泛型重构总结](./GENERIC_REFACTORING_SUMMARY.md)
+- [测试结果报告](./GENERIC_AGENT_TEST_RESULTS.md)

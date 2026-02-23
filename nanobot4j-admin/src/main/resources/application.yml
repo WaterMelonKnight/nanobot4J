@@ -9,3 +9,13 @@ logging:
   level:
     com.nanobot: INFO
     root: INFO
+
+# LLM配置
+llm:
+  provider: deepseek  # 可选: deepseek, kimi
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY:}
+    model: deepseek-chat
+  kimi:
+    api-key: ${KIMI_API_KEY:}
+    model: moonshot-v1-8k
