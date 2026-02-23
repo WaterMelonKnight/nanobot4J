@@ -58,12 +58,35 @@ mvn spring-boot:run
 
 ### 5. 体验 AI Agent 对话
 
-访问增强版对话页面：http://localhost:8080/chat-enhanced.html
+#### 方式一：使用启动脚本（推荐）
+
+```bash
+# 配置 API Key（在项目根目录创建 .env 文件）
+echo 'DEEPSEEK_API_KEY=your-deepseek-api-key' > .env
+echo 'KIMI_API_KEY=your-kimi-api-key' >> .env
+
+# 一键启动所有服务
+./start-generic.sh
+```
+
+#### 方式二：流式对话体验
+
+访问流式对话页面：http://localhost:8080/chat-stream.html
+
+**特性**：
+- ✅ 实时推送思考过程（SSE）
+- ✅ 逐步展示工具调用和结果
+- ✅ 基于异步线程池的高并发支持
+- ✅ 完整的 ReAct 流程可视化
+
+#### 方式三：传统对话
+
+访问泛型对话页面：http://localhost:8080/chat-generic.html
 
 尝试以下示例：
-- **多工具协同**: "将上海的气温与杭州的气温相加"
-- **数学计算**: "计算 100 * 25"
-- **天气查询**: "深圳今天天气怎么样？"
+- **数学计算**: "帮我计算 25 加 25"
+- **天气查询**: "上海的天气怎么样？"
+- **时间查询**: "现在几点了？"
 
 ## 使用方式
 
@@ -126,10 +149,63 @@ public class MyTools {
 通过 Admin Dashboard 查看所有在线服务及其提供的工具。
 
 ### 4. AI Agent 对话系统
-- **多步骤工具链式调用**: 支持复杂任务的自动分解和执行
-- **思考过程可视化**: 完整展示 Agent 的推理链路和决策过程
-- **智能任务规划**: 自动分析用户意图，生成最优执行计划
-- **上下文管理**: 步骤间结果自动传递，支持工具协同
+
+#### 🚀 泛型 ReAct Agent（零硬编码）
+
+基于真实 LLM（DeepSeek/Kimi）的完全动态化 Agent 系统：
+
+**核心特性**：
+- ✅ **零硬编码**：无任何工具名称硬编码，完全动态发现
+- ✅ **真实 LLM**：集成 DeepSeek 和 Kimi API
+- ✅ **完整 ReAct 循环**：思考 → 行动 → 观察 → 回答
+- ✅ **动态工具发现**：自动从注册中心获取所有在线工具
+- ✅ **JSON 协议**：标准化的工具调用格式
+- ✅ **参数类型保留**：正确处理数字、字符串、布尔值等类型
+
+**访问地址**：
+- 泛型对话页面：http://localhost:8080/chat-generic.html
+- 流式对话页面：http://localhost:8080/chat-stream.html
+
+#### 🌊 SSE 流式输出（v1.3 新增）
+
+基于 Server-Sent Events 的实时流式推送系统：
+
+**技术架构**：
+- **后端**：Spring Boot SSE + 异步线程池
+- **前端**：Fetch API ReadableStream
+- **事件协议**：结构化的 AgentStreamEvent
+
+**事件类型**：
+```java
+- THINKING      // 思考过程
+- TOOL_CALL     // 工具调用（含工具名和参数）
+- TOOL_RESULT   // 工具执行结果
+- FINAL_ANSWER  // 最终答案
+- DONE          // 任务完成
+- ERROR         // 异常信息
+```
+
+**实时推送示例**：
+```
+1. THINKING    → "🤔 开始分析任务..."
+2. THINKING    → "💭 TOOL_CALL: {\"name\": \"calculator\", ...}"
+3. TOOL_CALL   → toolName: "calculator", args: {...}
+4. TOOL_RESULT → "25.00 add 25.00 = 50.00"
+5. THINKING    → "💭 FINAL_ANSWER: 计算结果是 50"
+6. FINAL_ANSWER → "计算结果是 50"
+7. DONE        → 任务完成
+```
+
+**性能优势**：
+- 使用缓存线程池处理并发连接
+- 支持数千个同时在线的 SSE 连接
+- 实时推送，无需轮询
+- 自动超时管理（5 分钟）
+
+#### 📊 监控接口
+
+- **活跃连接数**：http://localhost:8080/api/agent/stream/stats
+- **注册实例**：http://localhost:8080/api/registry/instances
 
 ### 5. 轻量级设计
 - Core 模块无 Spring 依赖
@@ -154,66 +230,108 @@ public class MyTools {
 
 ## 技术栈
 
-- Java 17
+- Java 17+
 - Spring Boot 3.2.2
 - Maven
 - Lombok
 - OkHttp
 - Jackson
 - Bootstrap 5
+- **DeepSeek API** (LLM)
+- **Kimi/Moonshot API** (LLM)
+- **Server-Sent Events** (SSE)
+- **异步线程池** (高并发)
 
 ## 功能演示
 
-### AI Agent 对话系统
+### 🌊 SSE 流式 ReAct Agent（推荐）
 
-增强版 AI Agent 支持复杂的多步骤任务处理，具备以下能力：
+#### 实时推送演示
 
-#### 1. 多工具链式调用
+访问 http://localhost:8080/chat-stream.html，输入 "帮我计算 25 加 25"
 
-**示例**: "将上海的气温与杭州的气温相加"
-
+**实时推送过程**：
 ```
-思考过程：
-🤔 分析任务：将上海的气温与杭州的气温相加
-📋 执行计划：
-  步骤 1: 查询上海的天气
-  步骤 2: 查询杭州的天气
-  步骤 3: 计算气温总和
-
-执行结果：
-⚙️ 步骤 1: 查询上海的天气 → 25°C
-⚙️ 步骤 2: 查询杭州的天气 → 23°C
-⚙️ 步骤 3: 计算气温总和 → 48.0°C
-
-💡 最终答案: 48.0°C
+[1] THINKING    → 🤔 开始分析任务...
+[2] THINKING    → 💭 TOOL_CALL: {"name": "calculator", "args": {...}}
+[3] TOOL_CALL   → 🔧 调用工具: calculator
+                  参数: {"operation": "add", "a": 25, "b": 25}
+[4] TOOL_RESULT → 📊 工具返回: 25.00 add 25.00 = 50.00
+[5] THINKING    → 💭 FINAL_ANSWER: 25 加 25 的计算结果是 50
+[6] FINAL_ANSWER → ✨ 最终答案: 25 加 25 的计算结果是 50
+[7] DONE        → ✅ 任务完成
 ```
 
-#### 2. 单工具调用
+**技术实现**：
+- 每个步骤实时推送到前端
+- 无需等待整个流程完成
+- 用户可见完整的思考过程
+- 支持中断和错误处理
 
-**计算示例**: "计算 100 * 25"
-- 自动识别数学运算
-- 提取操作数和运算符
-- 返回结果: 2500.0
+#### 架构设计
 
-**查询示例**: "深圳今天天气怎么样？"
-- 识别城市名称
-- 调用天气工具
-- 返回结果: 深圳气温：28°C
+```
+┌─────────────┐         ┌──────────────────┐         ┌─────────────┐
+│   Browser   │  SSE    │  StreamAgent     │   RPC   │   Client    │
+│  (Frontend) │◄────────│   Controller     │◄────────│  (Tools)    │
+└─────────────┘         └──────────────────┘         └─────────────┘
+                                 │
+                                 ▼
+                        ┌──────────────────┐
+                        │  Thread Pool     │
+                        │  (Async Exec)    │
+                        └──────────────────┘
+                                 │
+                                 ▼
+                        ┌──────────────────┐
+                        │ Streaming        │
+                        │ ReAct Engine     │
+                        └──────────────────┘
+                                 │
+                                 ▼
+                        ┌──────────────────┐
+                        │  LLM Service     │
+                        │  (DeepSeek/Kimi) │
+                        └──────────────────┘
+```
 
-#### 3. 思考过程可视化
+### 🤖 泛型 ReAct Agent
 
-对话界面完整展示：
-- ✅ 任务分析过程
-- ✅ 执行计划步骤
-- ✅ 工具调用详情（工具名称 + 参数）
-- ✅ 每步执行结果
-- ✅ 最终答案汇总
+#### 零硬编码设计
+
+**传统方式**（硬编码）：
+```java
+// ❌ 不推荐：硬编码工具名称
+if (message.contains("天气")) {
+    return weatherTool.execute(params);
+}
+```
+
+**泛型方式**（动态发现）：
+```java
+// ✅ 推荐：完全动态化
+List<ToolMetadata> tools = getAvailableTools();  // 从注册中心获取
+String prompt = buildDynamicPrompt(tools);        // 动态构建 Prompt
+String llmResponse = llmService.chat(prompt);     // LLM 决策
+ToolCall toolCall = parseLLMResponse(llmResponse); // 解析调用
+String result = executeRemoteTool(toolCall);      // 远程执行
+```
+
+**优势**：
+- 新增工具无需修改 Admin 代码
+- 支持任意数量的工具
+- 工具可以动态上下线
+- 完全符合开闭原则（OCP）
 
 ### 访问地址
 
-- **服务管理**: http://localhost:8080/
-- **AI 对话（增强版）**: http://localhost:8080/chat-enhanced.html
-- **API 端点**: http://localhost:8080/api/agent/chat
+- **服务管理 Dashboard**: http://localhost:8080/
+- **泛型 Agent 对话**: http://localhost:8080/chat-generic.html
+- **流式 Agent 对话**: http://localhost:8080/chat-stream.html
+- **API 端点（同步）**: http://localhost:8080/api/agent/generic/chat
+- **API 端点（流式）**: http://localhost:8080/api/agent/stream/chat
+- **监控统计**: http://localhost:8080/api/agent/stream/stats
+- **注册实例**: http://localhost:8080/api/registry/instances
 
 ## 开发进度
 
@@ -233,28 +351,41 @@ public class MyTools {
 - [x] 实例状态管理（ONLINE/OFFLINE）
 - [x] Dashboard 可视化界面
 
-#### Phase 3: AI Agent 系统 (v1.2)
-- [x] 基础 Agent 对话功能
-- [x] 单工具智能调用
-- [x] 多步骤任务规划引擎
-- [x] 工具链式调用支持
-- [x] 上下文管理和结果传递
-- [x] 思考过程追踪和展示
-- [x] 增强版对话 UI
+#### Phase 3: 泛型 ReAct Agent (v1.2)
+- [x] 完全泛型化的 Agent 架构（零硬编码）
+- [x] 真实 LLM 集成（DeepSeek/Kimi）
+- [x] 动态工具发现和注入
+- [x] 完整 ReAct 循环实现
+- [x] JSON 工具调用协议
+- [x] 参数类型智能处理
+- [x] 远程工具 RPC 调用
+- [x] 泛型对话 UI（chat-generic.html）
+
+#### Phase 4: SSE 流式输出 (v1.3) 🆕
+- [x] AgentStreamEvent 事件协议设计
+- [x] StreamAgentController SSE 控制器
+- [x] StreamingGenericReActAgent 流式执行引擎
+- [x] 异步线程池架构
+- [x] 实时事件推送（6 种事件类型）
+- [x] 前端 ReadableStream 处理
+- [x] 流式对话 UI（chat-stream.html）
+- [x] 连接监控和统计接口
 
 ### 🚧 进行中
 
-- [ ] LLM 集成（支持 OpenAI/Claude API）
-- [ ] 记忆系统实现
-- [ ] 更多内置工具
+- [ ] 多轮对话上下文管理
+- [ ] 会话历史持久化
+- [ ] 更多 LLM 提供商支持（OpenAI/Claude）
 
 ### 📋 计划中
 
-- [ ] 工具市场
-- [ ] Agent 编排能力
-- [ ] 分布式工具调用
-- [ ] 性能监控和日志
-- [ ] 安全认证机制
+- [ ] 工具市场和插件系统
+- [ ] Agent 编排和工作流
+- [ ] 分布式工具调用优化
+- [ ] 性能监控和链路追踪
+- [ ] 安全认证和权限管理
+- [ ] WebSocket 双向通信
+- [ ] 多 Agent 协作
 
 ## License
 

@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>流式 ReAct Agent - SSE 实时对话</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .status-bar {
+            background: #f8f9fa;
+            padding: 12px 30px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #6c757d;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.streaming {
+            background: #ffc107;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            text-align: right;
+        }
+
+        .message-content {
+            display: inline-block;
+            max-width: 70%;
+            padding: 15px 20px;
+            border-radius: 18px;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message.agent .message-content {
+            background: white;
+            color: #333;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            text-align: left;
+        }
+
+        .event-item {
+            padding: 12px 18px;
+            margin: 8px 0;
+            border-radius: 12px;
+            font-size: 14px;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .event-thinking {
+            background: #e7f3ff;
+            border-left: 4px solid #0066cc;
+            color: #004085;
+        }
+
+        .event-tool-call {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            color: #856404;
+        }
+
+        .event-tool-result {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            color: #155724;
+        }
+
+        .event-final-answer {
+            background: #f8d7da;
+            border-left: 4px solid #dc3545;
+            color: #721c24;
+            font-weight: 500;
+        }
+
+        .event-error {
+            background: #f8d7da;
+            border-left: 4px solid #dc3545;
+            color: #721c24;
+        }
+
+        .tool-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 4px;
+            background: #667eea;
+            color: white;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+
+        .input-container {
+            padding: 20px 30px;
+            background: white;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+        }
+
+        #userInput {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        #userInput:focus {
+            border-color: #667eea;
+        }
+
+        #sendBtn {
+            padding: 15px 35px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #sendBtn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        #sendBtn:active {
+            transform: translateY(0);
+        }
+
+        #sendBtn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .json-preview {
+            background: #f4f4f4;
+            padding: 8px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 6px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 流式 ReAct Agent (SSE)</h1>
+            <p>基于 Java 21 虚拟线程 + Server-Sent Events 的实时对话系统</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">就绪</span>
+            </div>
+            <div class="status-item">
+                <span id="toolCount">可用工具: 加载中...</span>
+            </div>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <div class="message agent">
+                <div class="message-content">
+                    <strong>👋 你好！我是流式 ReAct Agent</strong><br><br>
+                    我会实时推送每一步的思考过程。试试问我：<br>
+                    • "帮我计算 25 加 25"<br>
+                    • "上海的天气怎么样？"<br>
+                    • "现在几点了？"
+                </div>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <input type="text" id="userInput" placeholder="输入你的问题..." />
+                <button id="sendBtn" onclick="sendMessage()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentEventSource = null;
+        let currentMessageDiv = null;
+
+        // 页面加载时获取可用工具
+        window.onload = async function() {
+            try {
+                const response = await fetch('/api/registry/instances');
+                const data = await response.json();
+                if (data.success && data.data.length > 0) {
+                    const tools = data.data[0].tools || [];
+                    document.getElementById('toolCount').textContent =
+                        `可用工具: ${tools.length} 个`;
+                }
+            } catch (error) {
+                console.error('获取工具列表失败:', error);
+            }
+        };
+
+        // 发送消息
+        function sendMessage() {
+            const input = document.getElementById('userInput');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            // 如果有正在进行的连接，先关闭
+            if (currentEventSource) {
+                currentEventSource.close();
+            }
+
+            // 显示用户消息
+            addUserMessage(message);
+            input.value = '';
+
+            // 禁用发送按钮
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<span class="loading"></span>';
+
+            // 更新状态
+            updateStatus('streaming', '正在思考...');
+
+            // 创建 Agent 消息容器
+            currentMessageDiv = createAgentMessageContainer();
+
+            // 建立 SSE 连接
+            connectSSE(message);
+        }
+
+        // 建立 SSE 连接
+        function connectSSE(message) {
+            // 使用 POST 请求建立 SSE 连接
+            fetch('/api/agent/stream/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                },
+                body: JSON.stringify({ message: message })
+            }).then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                function readStream() {
+                    reader.read().then(({ done, value }) => {
+                        if (done) {
+                            console.log('Stream complete');
+                            onStreamComplete();
+                            return;
+                        }
+
+                        const chunk = decoder.decode(value, { stream: true });
+                        const lines = chunk.split('\n');
+
+                        lines.forEach(line => {
+                            if (line.startsWith('data:')) {
+                                const data = line.substring(5).trim();
+                                if (data) {
+                                    try {
+                                        const event = JSON.parse(data);
+                                        handleSSEEvent(event);
+                                    } catch (e) {
+                                        console.error('Failed to parse event:', e, data);
+                                    }
+                                }
+                            }
+                        });
+
+                        readStream();
+                    }).catch(error => {
+                        console.error('Stream error:', error);
+                        onStreamError(error);
+                    });
+                }
+
+                readStream();
+            }).catch(error => {
+                console.error('Failed to connect SSE:', error);
+                onStreamError(error);
+            });
+        }
+
+        // 处理 SSE 事件
+        function handleSSEEvent(event) {
+            console.log('Received event:', event);
+
+            switch (event.type) {
+                case 'THINKING':
+                    addEventToMessage('thinking', '💭 ' + event.content);
+                    break;
+
+                case 'TOOL_CALL':
+                    const toolCallText = `🔧 调用工具: ${event.toolName}`;
+                    addEventToMessage('tool-call', toolCallText);
+                    if (event.toolArgs) {
+                        addJsonPreview(event.toolArgs);
+                    }
+                    break;
+
+                case 'TOOL_RESULT':
+                    const toolResultText = `📊 工具返回: ${event.toolResult}`;
+                    addEventToMessage('tool-result', toolResultText);
+                    break;
+
+                case 'FINAL_ANSWER':
+                    addEventToMessage('final-answer', '✨ 最终答案: ' + event.content);
+                    break;
+
+                case 'DONE':
+                    console.log('Task completed');
+                    onStreamComplete();
+                    break;
+
+                case 'ERROR':
+                    addEventToMessage('error', '❌ 错误: ' + event.content);
+                    onStreamComplete();
+                    break;
+
+                default:
+                    console.warn('Unknown event type:', event.type);
+            }
+        }
+
+        // 添加用户消息
+        function addUserMessage(text) {
+            const container = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message user';
+            messageDiv.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 创建 Agent 消息容器
+        function createAgentMessageContainer() {
+            const container = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message agent';
+            messageDiv.innerHTML = '<div class="message-content"></div>';
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+            return messageDiv.querySelector('.message-content');
+        }
+
+        // 添加事件到消息
+        function addEventToMessage(type, text) {
+            if (!currentMessageDiv) return;
+
+            const eventDiv = document.createElement('div');
+            eventDiv.className = `event-item event-${type}`;
+            eventDiv.textContent = text;
+            currentMessageDiv.appendChild(eventDiv);
+
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 添加 JSON 预览
+        function addJsonPreview(jsonStr) {
+            if (!currentMessageDiv) return;
+
+            try {
+                const formatted = JSON.stringify(JSON.parse(jsonStr), null, 2);
+                const preDiv = document.createElement('div');
+                preDiv.className = 'json-preview';
+                preDiv.textContent = formatted;
+                currentMessageDiv.appendChild(preDiv);
+            } catch (e) {
+                console.error('Failed to format JSON:', e);
+            }
+        }
+
+        // 流完成
+        function onStreamComplete() {
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = false;
+            sendBtn.textContent = '发送';
+            updateStatus('ready', '就绪');
+            currentMessageDiv = null;
+        }
+
+        // 流错误
+        function onStreamError(error) {
+            if (currentMessageDiv) {
+                addEventToMessage('error', '连接错误: ' + error.message);
+            }
+            onStreamComplete();
+        }
+
+        // 更新状态
+        function updateStatus(status, text) {
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+
+            statusDot.className = 'status-dot';
+            if (status === 'streaming') {
+                statusDot.classList.add('streaming');
+            }
+
+            statusText.textContent = text;
+        }
+
+        // HTML 转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML.replace(/\n/g, '<br>');
+        }
+
+        // 回车发送
+        document.getElementById('userInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
