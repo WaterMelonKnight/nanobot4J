@@ -154,7 +154,12 @@ public class GenericReActAgent {
     private String buildDynamicPrompt(List<ToolMetadata> tools, List<String> history) {
         StringBuilder prompt = new StringBuilder();
 
-        prompt.append("你是一个智能助手，可以使用以下工具来帮助用户：\n\n");
+        prompt.append("你是一个高级的泛型 ReAct Agent。你拥有强大的自我编程能力。\n");
+        prompt.append("当用户要求你执行某个任务，而你发现现有的可用工具列表中没有合适的工具时，请不要直接回答『我做不到』。\n");
+        prompt.append("相反，你应该调用 create_tool 工具，用 Groovy 语言编写一段能完成该任务的代码，动态创建一个新工具。");
+        prompt.append("创建成功后，立刻调用你刚刚创建的新工具来满足用户的需求。\n\n");
+
+        prompt.append("你可以使用以下工具来帮助用户：\n\n");
 
         // 动态注入工具列表
         prompt.append("可用工具：\n");

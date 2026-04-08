@@ -36,10 +36,36 @@ spring:
       write-dates-as-timestamps: false
     time-zone: UTC
 
+  # Redis Configuration
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: # 如果有密码请填写
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: -1ms
+
 # ============================================
 # Multi-Model LLM Configuration
 # ============================================
 nanobot:
+  # Redis Configuration
+  redis:
+    enabled: true
+    ttl-hours: 24  # 会话过期时间（小时）
+
+  # Memory Configuration
+  memory:
+    window-size: 10          # 滑动窗口大小（最近 N 条消息）
+    summary-threshold: 10    # 触发摘要的消息数阈值
+    summary-max-length: 100  # 摘要最大字数
+
   llm:
     # 默认使用的模型
     default-model: deepseek
