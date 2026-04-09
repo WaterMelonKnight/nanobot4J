@@ -18,10 +18,23 @@
     <description>Management Console - Dashboard for Agent Services</description>
 
     <dependencies>
+        <!-- Nanobot4J Core -->
+        <dependency>
+            <groupId>com.nanobot</groupId>
+            <artifactId>nanobot4j-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Web -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Spring Data Redis -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
         <!-- Thymeleaf Template Engine -->
@@ -41,6 +54,13 @@
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
             <version>4.12.0</version>
+        </dependency>
+
+        <!-- Groovy for Dynamic Tool Execution -->
+        <dependency>
+            <groupId>org.apache.groovy</groupId>
+            <artifactId>groovy</artifactId>
+            <version>4.0.15</version>
         </dependency>
 
         <!-- Lombok -->
