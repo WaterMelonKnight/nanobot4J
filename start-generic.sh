@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# Nanobot4J 泛型 Agent 启动脚本（支持真实LLM）
+# Nanobot4J 泛型 Agent 启动脚本（支持真实LLM + SSE流式交互）
 
 echo "=========================================="
 echo "  🤖 Nanobot4J Generic ReAct Agent"
 echo "  基于 DeepSeek 的智能对话系统"
+echo "  支持 SSE 流式实时推送"
 echo "=========================================="
 echo ""
 
@@ -54,6 +55,7 @@ echo "Step 2: 启动 Admin 控制台..."
 echo "=========================================="
 echo "🌐 Admin 地址: http://localhost:8080"
 echo "🎨 泛型Agent页面: http://localhost:8080/chat-generic.html"
+echo "⚡ SSE流式对话: http://localhost:8080/chat-stream.html"
 echo "🤖 LLM Provider: DeepSeek"
 echo ""
 
@@ -130,7 +132,9 @@ echo "=========================================="
 echo ""
 echo "📊 服务信息:"
 echo "  • Admin Dashboard: http://localhost:8080"
+echo "  • SSE流式对话: http://localhost:8080/chat-stream.html (推荐)"
 echo "  • 泛型Agent对话: http://localhost:8080/chat-generic.html"
+echo "  • 连接统计: http://localhost:8080/api/agent/stream/stats"
 echo "  • Client 应用: http://localhost:8081"
 echo ""
 echo "🤖 LLM 配置:"
@@ -151,6 +155,12 @@ echo "  • kill $ADMIN_PID $EXAMPLE_PID"
 echo "  • 或使用: pkill -f 'nanobot4j'"
 echo ""
 echo "💡 测试建议:"
+echo "  【SSE流式体验】(推荐)"
+echo "  1. 打开浏览器访问: http://localhost:8080/chat-stream.html"
+echo "  2. 尝试问: '帮我计算 25 加 25'"
+echo "  3. 实时观察 AI 思考过程、工具调用和结果"
+echo ""
+echo "  【传统对话体验】"
 echo "  1. 打开浏览器访问: http://localhost:8080/chat-generic.html"
 echo "  2. 尝试问: '上海的天气怎么样？'"
 echo "  3. 观察完整的 ReAct 流程"

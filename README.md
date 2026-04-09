@@ -25,6 +25,69 @@ nanobot4J/
 
 ## 快速开始
 
+### 方式一：使用启动脚本（推荐）
+
+#### 1. 配置环境变量
+
+在项目根目录创建 `.env` 文件：
+
+```bash
+# 创建 .env 文件
+cat > .env << 'EOF'
+DEEPSEEK_API_KEY=your-deepseek-api-key
+KIMI_API_KEY=your-kimi-api-key
+EOF
+```
+
+#### 2. 一键启动服务
+
+```bash
+# 启动所有服务（Admin + Client + SSE流式Agent）
+./start-generic.sh
+```
+
+启动脚本会自动完成：
+- ✅ 加载环境变量
+- ✅ 构建所有模块
+- ✅ 启动 Admin 控制台（端口 8080）
+- ✅ 启动 Client 应用（端口 8081）
+- ✅ 验证服务状态
+- ✅ 显示访问地址
+
+#### 3. 访问服务
+
+启动成功后，访问以下地址：
+
+- **SSE流式对话**（推荐）: http://localhost:8080/chat-stream.html
+- **传统对话**: http://localhost:8080/chat-generic.html
+- **管理控制台**: http://localhost:8080
+- **连接统计**: http://localhost:8080/api/agent/stream/stats
+
+#### 4. 停止服务
+
+```bash
+# 停止所有服务
+./stop.sh
+```
+
+停止脚本会：
+- 🛑 优雅关闭 Admin 服务
+- 🛑 优雅关闭 Client 服务
+- 🧹 清理残留进程
+- 📝 保留日志文件
+
+#### 5. 查看日志
+
+```bash
+# 查看 Admin 日志
+tail -f /tmp/admin.log
+
+# 查看 Client 日志
+tail -f /tmp/client.log
+```
+
+### 方式二：手动启动
+
 ### 1. 构建项目
 
 ```bash
@@ -87,6 +150,70 @@ echo 'KIMI_API_KEY=your-kimi-api-key' >> .env
 - **数学计算**: "帮我计算 25 加 25"
 - **天气查询**: "上海的天气怎么样？"
 - **时间查询**: "现在几点了？"
+
+## 部署和运维
+
+### 启动脚本说明
+
+项目提供了便捷的启动和停止脚本：
+
+#### start-generic.sh
+
+**功能**：
+- 自动加载 `.env` 环境变量
+- 构建所有模块（如需要）
+- 启动 Admin 控制台（包含 SSE 流式 Agent）
+- 启动 Client 应用（提供工具）
+- 验证服务状态
+- 显示访问地址和使用提示
+
+**使用方法**：
+```bash
+# 确保脚本有执行权限
+chmod +x start-generic.sh
+
+# 启动服务
+./start-generic.sh
+```
+
+#### stop.sh
+
+**功能**：
+- 查找所有运行中的 Nanobot4J 进程
+- 优雅关闭 Admin 和 Client 服务
+- 强制终止残留进程（如需要）
+- 保留日志文件供查看
+
+**使用方法**：
+```bash
+# 停止服务
+./stop.sh
+```
+
+### 日志管理
+
+**日志位置**：
+- Admin 日志: `/tmp/admin.log`
+- Client 日志: `/tmp/client.log`
+
+**查看日志**：
+```bash
+# 实时查看 Admin 日志
+tail -f /tmp/admin.log
+
+# 搜索错误日志
+grep ERROR /tmp/admin.log
+```
+
+### 监控接口
+
+```bash
+# 查看活跃 SSE 连接数
+curl http://localhost:8080/api/agent/stream/stats
+
+# 查看注册的工具实例
+curl http://localhost:8080/api/registry/instances
+```
 
 ## 使用方式
 
