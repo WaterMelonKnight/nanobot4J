@@ -2,6 +2,7 @@ package com.nanobot.admin.controller;
 
 import com.nanobot.admin.domain.ServiceInstance;
 import com.nanobot.admin.service.InstanceRegistry;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -84,6 +85,7 @@ public class RegistryController {
     }
 
     @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class RegistrationRequest {
         private String instanceId;
         private String serviceName;
