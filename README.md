@@ -1,519 +1,231 @@
-# Nanobot4J - Java Agent Framework
+# Nanobot4J
 
-一个轻量级的 Java Agent 框架，支持工具注册、服务发现和集中管理。
+> 一个面向生产环境的分布式 Java Agent 基础设施框架，将大模型推理能力与企业级微服务治理深度融合。
 
-## 项目结构
+[![Java](https://img.shields.io/badge/Java-21-orange)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green)](https://spring.io/projects/spring-boot)
+[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+
+---
+
+## 项目简介
+
+Nanobot4J 是一个基于 Java 21 构建的**分布式 AI Agent 基础设施**。它以 ReAct（Reasoning + Acting）为核心范式，通过仿 XXL-JOB 的去中心化工具治理架构，将任意 Spring Boot 微服务无侵入地接入 Agent 工具体系。框架内置多级记忆压缩、动态工具自举和工业级防死循环机制，可直接承载企业级 AI 应用的生产负载。
+
+---
+
+## 核心架构与特性
+
+### 1. 无侵入式微服务接入
+
+基于自研 `nanobot4j-spring-boot-starter`，业务服务只需引入依赖并在方法上标注 `@NanobotTool`，框架即可在启动时自动扫描、提取工具元数据（名称、描述、参数 Schema），并通过心跳机制注册到 Admin 控制台。**业务代码零改造，接入成本极低。**
+
+```java
+@NanobotTool(name = "query_order", description = "根据订单号查询订单状态")
+public String queryOrder(String orderId) {
+    return orderService.getStatus(orderId);
+}
+```
+
+### 2. 去中心化工具治理
+
+参考 XXL-JOB 的执行器注册模型，实现了完整的**双向服务治理**：
+
+- **Client → Admin 心跳注册**：各微服务实例定期上报自身地址与工具列表，Admin 维护在线实例注册表。
+- **Admin → Client 动态 RPC**：Agent 执行工具调用时，Admin 通过 HTTP 反向调用对应 Client 实例，实现运行时动态路由。
+- **服务发现与健康检测**：Admin 自动剔除心跳超时的实例，保证工具调用的高可用性。
+
+```
+[Agent Admin]  ←── 心跳注册 ───  [微服务 A (含 @NanobotTool)]
+     │                            [微服务 B (含 @NanobotTool)]
+     └──── HTTP RPC 调用 ────────► [目标工具实例]
+```
+
+### 3. 高并发流式引擎
+
+结合 **Java 21 Virtual Threads（虚拟线程）** 与 **SSE（Server-Sent Events）**，彻底解决 Agent 推理链路中的 I/O 长时阻塞问题：
+
+- 每个 SSE 长连接由一个虚拟线程承载，百万级并发下内存开销极低。
+- ReAct 循环的每个中间状态（`THINKING` / `TOOL_CALL` / `TOOL_RESULT`）实时推送到前端，实现**思维链（CoT）可视化**。
+- 前端无需轮询，延迟低至毫秒级。
+
+```
+LLM 推理中... → [THINKING 事件] → [TOOL_CALL 事件] → [TOOL_RESULT 事件] → [FINAL_ANSWER 事件]
+                    ↑ 实时 SSE 推流，全程可观测
+```
+
+### 4. 多级成本压缩记忆
+
+针对大模型 Token 成本问题，设计了三级记忆压缩架构：
+
+| 层级 | 机制 | 实现 |
+|------|------|------|
+| L1 短期记忆 | 滑动窗口（最近 10 条） | `RedisChatMemoryStore` |
+| L2 长期摘要 | 异步 LLM 摘要压缩 | `MemorySummarizer` + Virtual Thread |
+| L3 持久化 | Redis List + 24h TTL | `RedisSummaryStore` |
+
+当会话消息超过阈值时，后台虚拟线程自动调用 LLM 对历史消息生成摘要，并以 `System Message` 形式注入后续上下文，**在保留语义连贯性的同时大幅削减 Token 消耗**。
+
+### 5. 动态工具自举（Self-Synthesizing）
+
+突破静态工具边界的核心创新。当 Agent 遭遇现有工具无法覆盖的需求时，无需人工介入：
+
+1. LLM 调用内置的 `create_tool`，传入工具名称、描述和 Groovy 脚本。
+2. `ToolCreatorTool` 在运行时实例化 `DynamicGroovyTool` 并注册到工具注册表。
+3. Agent 立即调用新工具完成任务，**整个过程在单次对话内自动完成**。
+
+**安全沙箱保障**：Groovy 脚本在独立线程中执行，配备 5 秒超时熔断、危险 API 拦截（`System.exit`、`Runtime`、`ProcessBuilder`）和全异常捕获，主线程绝对安全。
+
+```
+用户: "帮我计算斐波那契数列第 30 项"
+Agent: [发现无此工具] → create_tool(fibonacci, groovy_code) → fibonacci(30) → FINAL_ANSWER: 832040
+```
+
+### 6. 工业级防御机制
+
+ReAct 引擎内置多层防御，确保生产环境稳定性：
+
+- **强制 `<thinking>` 反思缓冲**：System Prompt 强制要求 LLM 在每次工具调用前输出思考过程，尤其在上一步发生错误时进行反思，有效抑制代码幻觉。
+- **调用指纹校验（防死循环）**：引擎追踪每次工具调用的 `(工具名 + 参数)` 指纹，连续 2 次相同错误时自动注入系统警告，强制 LLM 切换策略。
+- **最大步数熔断器**：ReAct 循环设置 `max_steps = 15` 硬上限，超出后强制退出并推送 `ERROR` 事件，防止无限循环消耗资源。
+
+---
+
+## 模块说明
 
 ```
 nanobot4J/
 ├── nanobot4j-core/                 # 核心 SDK（无 Spring 依赖）
-│   ├── tool/                       # 工具接口定义
-│   ├── memory/                     # 记忆管理
-│   ├── agent/                      # Agent 核心
-│   └── llm/                        # LLM 客户端接口
-├── nanobot4j-spring-boot-starter/  # Spring Boot 自动装配
-│   ├── annotation/                 # @NanobotTool 注解
-│   ├── registry/                   # 工具注册表
-│   └── autoconfigure/              # 自动配置
-├── nanobot4j-admin/                # 管理控制台
-│   ├── controller/                 # REST API
-│   ├── service/                    # 实例注册表
-│   └── resources/static/           # Dashboard 页面
-└── nanobot4j-example/              # 示例应用
-    └── tools/                      # 示例工具
+│   ├── agent/Agent.java            # Agent 顶层接口
+│   ├── llm/                        # LLM 客户端抽象（LLMClient, Message）
+│   ├── tool/                       # 工具接口（Tool, ToolResult, ToolDefinition）
+│   └── memory/                     # 基础记忆接口（Memory, InMemoryMemory）
+│
+├── nanobot4j-spring-boot-starter/  # 自动装配 Starter
+│   ├── @NanobotTool 注解扫描        # 自动提取工具元数据
+│   ├── 心跳注册客户端               # 定时向 Admin 上报实例信息
+│   └── 工具 HTTP 执行端点           # 接收 Admin 的 RPC 调用
+│
+├── nanobot4j-admin/                # Agent 控制台（核心服务）
+│   ├── service/StreamingGenericReActAgent  # 工业级 ReAct 引擎（Phase 3）
+│   ├── service/GenericReActAgent           # 非流式 ReAct 引擎
+│   ├── service/InstanceRegistry            # 服务实例注册表
+│   ├── service/RemoteToolExecutor          # 远程工具 RPC 执行器
+│   ├── memory/                             # 多级记忆子系统（Phase 1）
+│   │   ├── RedisChatMemoryStore            # Redis 会话存储
+│   │   ├── RedisSummaryStore               # Redis 摘要存储
+│   │   └── MemorySummarizer                # 滑动窗口 + 异步摘要
+│   ├── tool/                               # 动态工具子系统（Phase 2）
+│   │   ├── DynamicGroovyTool               # Groovy 沙箱执行器
+│   │   ├── DynamicToolRegistry             # 动态工具注册表
+│   │   └── ToolCreatorTool                 # LLM 自我编程工具
+│   └── controller/                         # REST + SSE 接口层
+│
+└── nanobot4j-example/              # 示例工具服务
+    └── 演示如何通过 Starter 接入 Admin
 ```
+
+| 模块 | 定位 | 关键依赖 |
+|------|------|---------|
+| `nanobot4j-core` | 纯 Java 抽象层，无框架耦合 | 无 |
+| `nanobot4j-spring-boot-starter` | Spring Boot 自动装配 | core |
+| `nanobot4j-admin` | Agent 大脑，承载所有推理逻辑 | core, starter, Redis, Groovy |
+| `nanobot4j-example` | 工具服务示例 | starter |
+
+---
 
 ## 快速开始
 
-### 方式一：使用启动脚本（推荐）
+### 环境要求
 
-#### 1. 配置环境变量
+| 依赖 | 版本 |
+|------|------|
+| JDK | 21+ |
+| Maven | 3.8+ |
+| Redis | 6.0+（Admin 记忆功能需要） |
 
-在项目根目录创建 `.env` 文件：
-
-```bash
-# 创建 .env 文件
-cat > .env << 'EOF'
-DEEPSEEK_API_KEY=your-deepseek-api-key
-KIMI_API_KEY=your-kimi-api-key
-EOF
-```
-
-#### 2. 一键启动服务
+### 1. 克隆并编译
 
 ```bash
-# 启动所有服务（Admin + Client + SSE流式Agent）
-./start-generic.sh
-```
-
-启动脚本会自动完成：
-- ✅ 加载环境变量
-- ✅ 构建所有模块
-- ✅ 启动 Admin 控制台（端口 8080）
-- ✅ 启动 Client 应用（端口 8081）
-- ✅ 验证服务状态
-- ✅ 显示访问地址
-
-#### 3. 访问服务
-
-启动成功后，访问以下地址：
-
-- **SSE流式对话**（推荐）: http://localhost:8080/chat-stream.html
-- **传统对话**: http://localhost:8080/chat-generic.html
-- **管理控制台**: http://localhost:8080
-- **连接统计**: http://localhost:8080/api/agent/stream/stats
-
-#### 4. 停止服务
-
-```bash
-# 停止所有服务
-./stop.sh
-```
-
-停止脚本会：
-- 🛑 优雅关闭 Admin 服务
-- 🛑 优雅关闭 Client 服务
-- 🧹 清理残留进程
-- 📝 保留日志文件
-
-#### 5. 查看日志
-
-```bash
-# 查看 Admin 日志
-tail -f /tmp/admin.log
-
-# 查看 Client 日志
-tail -f /tmp/client.log
-```
-
-### 方式二：手动启动
-
-### 1. 构建项目
-
-```bash
-cd /workspace/nanobot4J
-mvn clean install -DskipTests
+git clone https://github.com/your-org/nanobot4J.git
+cd nanobot4J
+mvn clean package -DskipTests -f pom-parent.xml
 ```
 
 ### 2. 启动 Admin 控制台
 
 ```bash
-cd nanobot4j-admin
-mvn spring-boot:run
+# 配置 LLM 和 Redis（编辑 application.yml）
+vim nanobot4j-admin/src/main/resources/application.yml
+
+# 启动
+java -jar nanobot4j-admin/target/nanobot4j-admin-1.0.0-SNAPSHOT.jar
 ```
 
-访问: http://localhost:8080
+Admin 默认监听 `http://localhost:8080`，关键接口：
 
-### 3. 启动示例应用
+| 接口 | 说明 |
+|------|------|
+| `POST /api/agent/stream/chat` | SSE 流式对话（支持多轮 sessionId） |
+| `GET  /api/agent/stream/stats` | 活跃连接数监控 |
+| `POST /api/registry/register` | Client 心跳注册 |
+| `GET  /api/registry/instances` | 查看在线工具实例 |
+
+### 3. 接入工具服务（Example）
 
 ```bash
-cd nanobot4j-example
-mvn spring-boot:run
+java -jar nanobot4j-example/target/nanobot4j-example-1.0.0-SNAPSHOT.jar
 ```
 
-示例应用会自动注册到 Admin 控制台，并每 30 秒发送心跳。
+Example 启动后自动向 Admin 注册，Admin 即可调用其工具。
 
-### 4. 查看 Dashboard
-
-打开浏览器访问 http://localhost:8080，你将看到：
-- 左侧：已注册的服务实例列表
-- 右侧：选中实例的工具详情
-
-### 5. 体验 AI Agent 对话
-
-#### 方式一：使用启动脚本（推荐）
+### 4. 发起流式对话
 
 ```bash
-# 配置 API Key（在项目根目录创建 .env 文件）
-echo 'DEEPSEEK_API_KEY=your-deepseek-api-key' > .env
-echo 'KIMI_API_KEY=your-kimi-api-key' >> .env
+# 新会话（自动生成 sessionId）
+curl -X POST http://localhost:8080/api/agent/stream/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "帮我计算 123 + 456"}' \
+  --no-buffer
 
-# 一键启动所有服务
-./start-generic.sh
+# 多轮对话（传入 sessionId 保持记忆）
+curl -X POST http://localhost:8080/api/agent/stream/chat \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId": "my-session-001", "message": "刚才的结果再乘以 2"}' \
+  --no-buffer
 ```
 
-#### 方式二：流式对话体验
-
-访问流式对话页面：http://localhost:8080/chat-stream.html
-
-**特性**：
-- ✅ 实时推送思考过程（SSE）
-- ✅ 逐步展示工具调用和结果
-- ✅ 基于异步线程池的高并发支持
-- ✅ 完整的 ReAct 流程可视化
-
-#### 方式三：传统对话
-
-访问泛型对话页面：http://localhost:8080/chat-generic.html
-
-尝试以下示例：
-- **数学计算**: "帮我计算 25 加 25"
-- **天气查询**: "上海的天气怎么样？"
-- **时间查询**: "现在几点了？"
-
-## 部署和运维
-
-### 启动脚本说明
-
-项目提供了便捷的启动和停止脚本：
-
-#### start-generic.sh
-
-**功能**：
-- 自动加载 `.env` 环境变量
-- 构建所有模块（如需要）
-- 启动 Admin 控制台（包含 SSE 流式 Agent）
-- 启动 Client 应用（提供工具）
-- 验证服务状态
-- 显示访问地址和使用提示
-
-**使用方法**：
-```bash
-# 确保脚本有执行权限
-chmod +x start-generic.sh
-
-# 启动服务
-./start-generic.sh
-```
-
-#### stop.sh
-
-**功能**：
-- 查找所有运行中的 Nanobot4J 进程
-- 优雅关闭 Admin 和 Client 服务
-- 强制终止残留进程（如需要）
-- 保留日志文件供查看
-
-**使用方法**：
-```bash
-# 停止服务
-./stop.sh
-```
-
-### 日志管理
-
-**日志位置**：
-- Admin 日志: `/tmp/admin.log`
-- Client 日志: `/tmp/client.log`
-
-**查看日志**：
-```bash
-# 实时查看 Admin 日志
-tail -f /tmp/admin.log
-
-# 搜索错误日志
-grep ERROR /tmp/admin.log
-```
-
-### 监控接口
-
-```bash
-# 查看活跃 SSE 连接数
-curl http://localhost:8080/api/agent/stream/stats
-
-# 查看注册的工具实例
-curl http://localhost:8080/api/registry/instances
-```
-
-## 使用方式
-
-### 在你的项目中使用
-
-1. 添加依赖：
-
-```xml
-<dependency>
-    <groupId>com.nanobot</groupId>
-    <artifactId>nanobot4j-spring-boot-starter</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-</dependency>
-```
-
-2. 配置 application.yml：
-
-```yaml
-nanobot:
-  admin:
-    enabled: true
-    url: http://localhost:8080
-    heartbeat-interval: 30
-```
-
-3. 创建工具：
-
-```java
-@Component
-public class MyTools {
-
-    @NanobotTool(
-        name = "my_tool",
-        description = "我的工具描述",
-        parameterSchema = """
-            {
-              "type": "object",
-              "properties": {
-                "param1": {"type": "string"}
-              }
-            }
-            """
-    )
-    public String myTool(Map<String, Object> params) {
-        // 实现你的工具逻辑
-        return "result";
-    }
-}
-```
-
-## 核心特性
-
-### 1. 工具自动注册
-使用 `@NanobotTool` 注解标记方法，框架会自动扫描并注册。
-
-### 2. 服务发现
-应用启动时自动注册到 Admin 控制台，支持心跳检测。
-
-### 3. 集中管理
-通过 Admin Dashboard 查看所有在线服务及其提供的工具。
-
-### 4. AI Agent 对话系统
-
-#### 🚀 泛型 ReAct Agent（零硬编码）
-
-基于真实 LLM（DeepSeek/Kimi）的完全动态化 Agent 系统：
-
-**核心特性**：
-- ✅ **零硬编码**：无任何工具名称硬编码，完全动态发现
-- ✅ **真实 LLM**：集成 DeepSeek 和 Kimi API
-- ✅ **完整 ReAct 循环**：思考 → 行动 → 观察 → 回答
-- ✅ **动态工具发现**：自动从注册中心获取所有在线工具
-- ✅ **JSON 协议**：标准化的工具调用格式
-- ✅ **参数类型保留**：正确处理数字、字符串、布尔值等类型
-
-**访问地址**：
-- 泛型对话页面：http://localhost:8080/chat-generic.html
-- 流式对话页面：http://localhost:8080/chat-stream.html
-
-#### 🌊 SSE 流式输出（v1.3 新增）
-
-基于 Server-Sent Events 的实时流式推送系统：
-
-**技术架构**：
-- **后端**：Spring Boot SSE + 异步线程池
-- **前端**：Fetch API ReadableStream
-- **事件协议**：结构化的 AgentStreamEvent
-
-**事件类型**：
-```java
-- THINKING      // 思考过程
-- TOOL_CALL     // 工具调用（含工具名和参数）
-- TOOL_RESULT   // 工具执行结果
-- FINAL_ANSWER  // 最终答案
-- DONE          // 任务完成
-- ERROR         // 异常信息
-```
-
-**实时推送示例**：
-```
-1. THINKING    → "🤔 开始分析任务..."
-2. THINKING    → "💭 TOOL_CALL: {\"name\": \"calculator\", ...}"
-3. TOOL_CALL   → toolName: "calculator", args: {...}
-4. TOOL_RESULT → "25.00 add 25.00 = 50.00"
-5. THINKING    → "💭 FINAL_ANSWER: 计算结果是 50"
-6. FINAL_ANSWER → "计算结果是 50"
-7. DONE        → 任务完成
-```
-
-**性能优势**：
-- 使用缓存线程池处理并发连接
-- 支持数千个同时在线的 SSE 连接
-- 实时推送，无需轮询
-- 自动超时管理（5 分钟）
-
-#### 📊 监控接口
-
-- **活跃连接数**：http://localhost:8080/api/agent/stream/stats
-- **注册实例**：http://localhost:8080/api/registry/instances
-
-### 5. 轻量级设计
-- Core 模块无 Spring 依赖
-- Starter 模块提供开箱即用的自动配置
-- Admin 控制台使用简单的 HTML + Bootstrap
-
-## 架构设计
-
-### 模块职责
-
-- **nanobot4j-core**: 提供核心抽象（Tool, Memory, Agent, LLM）
-- **nanobot4j-spring-boot-starter**: Spring Boot 集成，自动扫描和注册
-- **nanobot4j-admin**: 服务注册中心和管理控制台
-
-### 注册机制
-
-1. 应用启动时，`AdminReporter` 监听 `ApplicationReadyEvent`
-2. 收集本地注册的所有工具信息
-3. 向 Admin 发送注册请求（POST /api/registry/register）
-4. 启动定时任务，每 30 秒发送心跳（POST /api/registry/beat）
-5. Admin 每 30 秒检查实例状态，超过 90 秒无心跳标记为 OFFLINE
-
-## 技术栈
-
-- Java 17+
-- Spring Boot 3.2.2
-- Maven
-- Lombok
-- OkHttp
-- Jackson
-- Bootstrap 5
-- **DeepSeek API** (LLM)
-- **Kimi/Moonshot API** (LLM)
-- **Server-Sent Events** (SSE)
-- **异步线程池** (高并发)
-
-## 功能演示
-
-### 🌊 SSE 流式 ReAct Agent（推荐）
-
-#### 实时推送演示
-
-访问 http://localhost:8080/chat-stream.html，输入 "帮我计算 25 加 25"
-
-**实时推送过程**：
-```
-[1] THINKING    → 🤔 开始分析任务...
-[2] THINKING    → 💭 TOOL_CALL: {"name": "calculator", "args": {...}}
-[3] TOOL_CALL   → 🔧 调用工具: calculator
-                  参数: {"operation": "add", "a": 25, "b": 25}
-[4] TOOL_RESULT → 📊 工具返回: 25.00 add 25.00 = 50.00
-[5] THINKING    → 💭 FINAL_ANSWER: 25 加 25 的计算结果是 50
-[6] FINAL_ANSWER → ✨ 最终答案: 25 加 25 的计算结果是 50
-[7] DONE        → ✅ 任务完成
-```
-
-**技术实现**：
-- 每个步骤实时推送到前端
-- 无需等待整个流程完成
-- 用户可见完整的思考过程
-- 支持中断和错误处理
-
-#### 架构设计
+SSE 响应示例：
 
 ```
-┌─────────────┐         ┌──────────────────┐         ┌─────────────┐
-│   Browser   │  SSE    │  StreamAgent     │   RPC   │   Client    │
-│  (Frontend) │◄────────│   Controller     │◄────────│  (Tools)    │
-└─────────────┘         └──────────────────┘         └─────────────┘
-                                 │
-                                 ▼
-                        ┌──────────────────┐
-                        │  Thread Pool     │
-                        │  (Async Exec)    │
-                        └──────────────────┘
-                                 │
-                                 ▼
-                        ┌──────────────────┐
-                        │ Streaming        │
-                        │ ReAct Engine     │
-                        └──────────────────┘
-                                 │
-                                 ▼
-                        ┌──────────────────┐
-                        │  LLM Service     │
-                        │  (DeepSeek/Kimi) │
-                        └──────────────────┘
+data: {"type":"THINKING","content":"📚 已加载 3 条历史记忆"}
+data: {"type":"THINKING","content":"🧠 用户需要计算加法，使用 calculator 工具"}
+data: {"type":"TOOL_CALL","toolName":"calculator","toolArgs":"{\"a\":123,\"b\":456}"}
+data: {"type":"TOOL_RESULT","toolName":"calculator","toolResult":"579"}
+data: {"type":"FINAL_ANSWER","content":"123 + 456 = 579"}
+data: {"type":"DONE"}
 ```
 
-### 🤖 泛型 ReAct Agent
+---
 
-#### 零硬编码设计
+## Roadmap
 
-**传统方式**（硬编码）：
-```java
-// ❌ 不推荐：硬编码工具名称
-if (message.contains("天气")) {
-    return weatherTool.execute(params);
-}
-```
+| 状态 | 特性 |
+|------|------|
+| ✅ 已完成 | 多级记忆（Redis + 滑动窗口 + 异步摘要） |
+| ✅ 已完成 | 动态工具自举（Groovy 沙箱 + ToolCreatorTool） |
+| ✅ 已完成 | 工业级 ReAct 引擎（熔断器 + 防死循环 + thinking 标签） |
+| ✅ 已完成 | SSE 流式推流 + 虚拟线程并发 |
+| ✅ 已完成 | 去中心化工具治理（心跳注册 + 动态 RPC） |
+| 🔲 规划中 | **凭证保险箱（Credential Vault）注入**：支持动态 Groovy 脚本安全调用需鉴权的外部 API，凭证加密存储，运行时注入，脚本代码中不暴露明文密钥 |
+| 🔲 规划中 | **多 LLM 路由**：根据任务复杂度自动路由到不同模型（GPT-4o / Claude / 本地 Ollama），降低推理成本 |
+| 🔲 规划中 | **工具调用链追踪**：集成 OpenTelemetry，对每次 ReAct 循环生成完整 Trace，支持 Jaeger / Zipkin 可视化 |
+| 🔲 规划中 | **Agent 协作（Multi-Agent）**：支持 Admin 将子任务委派给专属 Sub-Agent，实现并行工具调用 |
+| 🔲 规划中 | **工具版本管理**：动态工具支持版本控制与回滚，防止 LLM 生成的脚本覆盖稳定版本 |
+| 🔲 规划中 | **Web 管理界面**：可视化展示在线工具实例、会话记忆、ReAct 执行轨迹 |
 
-**泛型方式**（动态发现）：
-```java
-// ✅ 推荐：完全动态化
-List<ToolMetadata> tools = getAvailableTools();  // 从注册中心获取
-String prompt = buildDynamicPrompt(tools);        // 动态构建 Prompt
-String llmResponse = llmService.chat(prompt);     // LLM 决策
-ToolCall toolCall = parseLLMResponse(llmResponse); // 解析调用
-String result = executeRemoteTool(toolCall);      // 远程执行
-```
-
-**优势**：
-- 新增工具无需修改 Admin 代码
-- 支持任意数量的工具
-- 工具可以动态上下线
-- 完全符合开闭原则（OCP）
-
-### 访问地址
-
-- **服务管理 Dashboard**: http://localhost:8080/
-- **泛型 Agent 对话**: http://localhost:8080/chat-generic.html
-- **流式 Agent 对话**: http://localhost:8080/chat-stream.html
-- **API 端点（同步）**: http://localhost:8080/api/agent/generic/chat
-- **API 端点（流式）**: http://localhost:8080/api/agent/stream/chat
-- **监控统计**: http://localhost:8080/api/agent/stream/stats
-- **注册实例**: http://localhost:8080/api/registry/instances
-
-## 开发进度
-
-### ✅ 已完成
-
-#### Phase 1: 基础架构 (v1.0)
-- [x] 多模块 Maven 项目结构
-- [x] 核心 SDK 设计（nanobot4j-core）
-- [x] Spring Boot Starter 自动装配
-- [x] @NanobotTool 注解支持
-- [x] 工具自动扫描和注册
-
-#### Phase 2: 服务治理 (v1.1)
-- [x] Admin 管理控制台
-- [x] 服务注册与发现机制
-- [x] 心跳检测和健康检查
-- [x] 实例状态管理（ONLINE/OFFLINE）
-- [x] Dashboard 可视化界面
-
-#### Phase 3: 泛型 ReAct Agent (v1.2)
-- [x] 完全泛型化的 Agent 架构（零硬编码）
-- [x] 真实 LLM 集成（DeepSeek/Kimi）
-- [x] 动态工具发现和注入
-- [x] 完整 ReAct 循环实现
-- [x] JSON 工具调用协议
-- [x] 参数类型智能处理
-- [x] 远程工具 RPC 调用
-- [x] 泛型对话 UI（chat-generic.html）
-
-#### Phase 4: SSE 流式输出 (v1.3) 🆕
-- [x] AgentStreamEvent 事件协议设计
-- [x] StreamAgentController SSE 控制器
-- [x] StreamingGenericReActAgent 流式执行引擎
-- [x] 异步线程池架构
-- [x] 实时事件推送（6 种事件类型）
-- [x] 前端 ReadableStream 处理
-- [x] 流式对话 UI（chat-stream.html）
-- [x] 连接监控和统计接口
-
-### 🚧 进行中
-
-- [ ] 多轮对话上下文管理
-- [ ] 会话历史持久化
-- [ ] 更多 LLM 提供商支持（OpenAI/Claude）
-
-### 📋 计划中
-
-- [ ] 工具市场和插件系统
-- [ ] Agent 编排和工作流
-- [ ] 分布式工具调用优化
-- [ ] 性能监控和链路追踪
-- [ ] 安全认证和权限管理
-- [ ] WebSocket 双向通信
-- [ ] 多 Agent 协作
+---
 
 ## License
 
-MIT
+MIT License © 2024 Nanobot4J Contributors
