@@ -78,13 +78,8 @@ public class StreamingGenericReActAgent {
             sendEvent(emitter, AgentStreamEvent.thinking(
                 "📚 已加载 " + memoryHistory.size() + " 条历史记忆"));
 
-            // ── Phase 2: 拉取可用工具（远程 + 动态） ──────────────────────
+            // ── Phase 2: 拉取可用工具（远程 + 动态，ToolCreatorTool 始终常驻） ──
             List<ToolMetadata> availableTools = buildAvailableTools();
-            if (availableTools.isEmpty()) {
-                sendEvent(emitter, AgentStreamEvent.error("当前没有可用的工具"));
-                emitter.complete();
-                return;
-            }
             sendEvent(emitter, AgentStreamEvent.thinking(
                 "🔧 可用工具：" + availableTools.stream()
                     .map(ToolMetadata::getName).toList()));

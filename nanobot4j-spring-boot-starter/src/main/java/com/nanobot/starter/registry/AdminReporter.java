@@ -74,8 +74,14 @@ public class AdminReporter {
 
         // 获取应用端口
         String port = event.getApplicationContext().getEnvironment().getProperty("server.port", "8080");
-        String host = InetAddress.getLocalHost().getHostAddress();
-        this.instanceAddress = "http://" + host + ":" + port;
+
+        // 优先使用配置的回调地址，否则默认 localhost（避免内网 IP 导致 Admin 回调失败）
+        String configuredAddress = properties.getAdmin().getInstanceAddress();
+        if (configuredAddress != null && !configuredAddress.isBlank()) {
+            this.instanceAddress = configuredAddress;
+        } else {
+            this.instanceAddress = "http://localhost:" + port;
+        }
 
         log.info("Instance initialized: id={}, address={}", instanceId, instanceAddress);
     }

@@ -23,9 +23,9 @@ public class NanobotProperties {
     @Data
     public static class Admin {
         /**
-         * Admin 服务地址（例如：http://localhost:9090）
+         * Admin 服务地址（例如：http://localhost:8080）
          */
-        private String address = "http://localhost:9090";
+        private String address = "http://localhost:8080";
 
         /**
          * 心跳间隔（秒）
@@ -36,6 +36,12 @@ public class NanobotProperties {
          * 是否启用注册
          */
         private boolean enabled = true;
+
+        /**
+         * 本实例对外暴露的回调地址（Admin 用此地址调用工具）
+         * 不配置则自动推断为 http://localhost:{server.port}
+         */
+        private String instanceAddress;
     }
 
     @Data
