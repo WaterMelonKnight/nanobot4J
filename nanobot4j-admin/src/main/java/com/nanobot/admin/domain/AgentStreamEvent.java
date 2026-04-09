@@ -31,7 +31,8 @@ public record AgentStreamEvent(
         TOOL_RESULT,
         FINAL_ANSWER,
         DONE,
-        ERROR
+        ERROR,
+        WARNING   // 防循环机制：连续相同错误时推送
     }
 
     // 便捷构造方法
@@ -79,6 +80,14 @@ public record AgentStreamEvent(
     public static AgentStreamEvent error(String message) {
         return AgentStreamEvent.builder()
             .type(EventType.ERROR)
+            .content(message)
+            .timestamp(System.currentTimeMillis())
+            .build();
+    }
+
+    public static AgentStreamEvent warning(String message) {
+        return AgentStreamEvent.builder()
+            .type(EventType.WARNING)
             .content(message)
             .timestamp(System.currentTimeMillis())
             .build();

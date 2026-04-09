@@ -37,12 +37,16 @@ public class StreamAgentController {
     /**
      * 流式对话接口
      *
-     * @param request 包含用户消息的请求体
+     * @param request 包含用户消息的请求体（可选 sessionId，不传则自动生成）
      * @return SSE 流
      */
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody ChatRequest request) {
-        String sessionId = generateSessionId();
+        // sessionId 由客户端传入以支持多轮记忆；不传则生成新会话
+        String sessionId = (request.sessionId() != null && !request.sessionId().isBlank())
+            ? request.sessionId()
+            : generateSessionId();
+
         log.info("Starting streaming chat session: {}, message: {}", sessionId, request.message());
 
         // 创建 SSE Emitter，设置 5 分钟超时
@@ -51,7 +55,7 @@ public class StreamAgentController {
 
         // 设置完成和超时回调
         emitter.onCompletion(() -> {
-            log.info("SSE session completed: ", sessionId);
+            log.info("SSE session completed: {}", sessionId);
             activeEmitters.remove(sessionId);
         });
 
@@ -69,14 +73,12 @@ public class StreamAgentController {
         // 使用线程池异步执行 ReAct 循环
         executorService.submit(() -> {
             try {
-                streamingAgent.chatStreaming(request.message(), emitter);
+                streamingAgent.chatStreaming(sessionId, request.message(), emitter);
             } catch (Exception e) {
                 log.error("Error in streaming agent execution", e);
                 try {
                     emitter.completeWithError(e);
-                } catch (Exception ignored) {
-                    // Emitter 可能已经关闭
-                }
+                } catch (Exception ignored) { }
             }
         });
 
@@ -104,6 +106,9 @@ public class StreamAgentController {
 
     /**
      * 聊天请求
+     *
+     * @param sessionId 会话 ID（可选，不传则自动生成新会话）
+     * @param message   用户消息
      */
-    public record ChatRequest(String message) {}
+    public record ChatRequest(String sessionId, String message) {}
 }

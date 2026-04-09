@@ -4,6 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nanobot.admin.domain.AgentStreamEvent;
 import com.nanobot.admin.domain.ServiceInstance;
+import com.nanobot.admin.memory.ChatMemoryStore;
+import com.nanobot.admin.memory.MemorySummarizer;
+import com.nanobot.admin.tool.DynamicToolRegistry;
+import com.nanobot.admin.tool.ToolCreatorTool;
+import com.nanobot.core.llm.Message;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,15 +17,19 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.stream.Collectors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * 流式泛型 ReAct Agent - 基于 SSE 实时推送
+ * 工业级流式 ReAct Agent - Phase 3 重构版
  *
- * 核心特性：
- * 1. 每个 ReAct 步骤实时推送事件到前端
- * 2. 使用虚拟线程处理长连接
- * 3. 完全动态化，零硬编码
+ * 核心能力：
+ * 1. 多级记忆：Redis 持久化 + 滑动窗口 + 异步摘要
+ * 2. 动态工具自举：LLM 可通过 create_tool 在运行时创建新工具
+ * 3. 熔断器：最大 15 步强制退出
+ * 4. 防死循环：连续相同错误拦截 + 系统警告注入
+ * 5. 强制 <thinking> 标签：SSE 实时解析并推送思考过程
+ * 6. 全程 SSE 推流：所有中间状态实时推送
  */
 @Slf4j
 @Service
@@ -30,188 +39,381 @@ public class StreamingGenericReActAgent {
     private final InstanceRegistry instanceRegistry;
     private final RemoteToolExecutor remoteToolExecutor;
     private final LLMService llmService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ChatMemoryStore chatMemoryStore;
+    private final MemorySummarizer memorySummarizer;
+    private final DynamicToolRegistry dynamicToolRegistry;
+    private final ToolCreatorTool toolCreatorTool;
+    private final ObjectMapper objectMapper;
 
-    private static final int MAX_ITERATIONS = 10;
-    private static final String TOOL_CALL_MARKER = "TOOL_CALL:";
+    // ========== 熔断器常量 ==========
+
+    /** 最大执行步数（熔断阈值） */
+    private static final int MAX_STEPS = 15;
+
+    /** 滑动窗口大小 */
+    private static final int MEMORY_WINDOW = 10;
+
+    // ========== 协议标记 ==========
+
+    private static final String TOOL_CALL_MARKER   = "TOOL_CALL:";
     private static final String FINAL_ANSWER_MARKER = "FINAL_ANSWER:";
+    private static final Pattern THINKING_PATTERN =
+        Pattern.compile("<thinking>(.*?)</thinking>", Pattern.DOTALL);
+
+    // ========== 主入口 ==========
 
     /**
-     * 流式对话处理 - 主入口
+     * 流式对话 - 主入口
+     *
+     * @param sessionId   会话 ID（多轮记忆的 key）
+     * @param userMessage 用户消息
+     * @param emitter     SSE 推流器
      */
-    public void chatStreaming(String userMessage, SseEmitter emitter) {
-        log.info("Starting streaming ReAct for message: {}", userMessage);
+    public void chatStreaming(String sessionId, String userMessage, SseEmitter emitter) {
+        log.info("[ReAct] session={}, message={}", sessionId, userMessage);
 
         try {
-            // 1. 获取所有在线工具
-            List<ToolMetadata> availableTools = getAvailableTools();
+            // ── Phase 1: 加载记忆 ───────────────────────────────────────────
+            List<Message> memoryHistory = memorySummarizer.applyWindow(sessionId);
+            sendEvent(emitter, AgentStreamEvent.thinking(
+                "📚 已加载 " + memoryHistory.size() + " 条历史记忆"));
+
+            // ── Phase 2: 拉取可用工具（远程 + 动态） ──────────────────────
+            List<ToolMetadata> availableTools = buildAvailableTools();
             if (availableTools.isEmpty()) {
                 sendEvent(emitter, AgentStreamEvent.error("当前没有可用的工具"));
                 emitter.complete();
                 return;
             }
+            sendEvent(emitter, AgentStreamEvent.thinking(
+                "🔧 可用工具：" + availableTools.stream()
+                    .map(ToolMetadata::getName).toList()));
 
-            // 2. 初始化对话历史
-            List<String> conversationHistory = new ArrayList<>();
-            conversationHistory.add("User: " + userMessage);
+            // ── Phase 3: 保存用户消息到 Redis ─────────────────────────────
+            chatMemoryStore.addMessage(sessionId, Message.user(userMessage));
 
-            // 3. 开始 ReAct 循环
+            // ── Phase 4: 构建当前轮次的对话上下文 ─────────────────────────
+            List<String> roundHistory = new ArrayList<>();
+            roundHistory.add("User: " + userMessage);
+
+            // ── Phase 5: ReAct 主循环（含熔断器）─────────────────────────
             sendEvent(emitter, AgentStreamEvent.thinking("🤔 开始分析任务..."));
+
+            // 防死循环状态跟踪
+            String lastErrorKey   = null;
+            int    repeatErrorCount = 0;
 
             boolean taskCompleted = false;
 
-            for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-                log.info("ReAct iteration {}/{}", iteration + 1, MAX_ITERATIONS);
+            for (int step = 0; step < MAX_STEPS; step++) {
+                log.info("[ReAct] step={}/{}", step + 1, MAX_STEPS);
 
-                // 3.1 构建动态 Prompt
-                String systemPrompt = buildDynamicPrompt(availableTools, conversationHistory);
+                // 3.1 构建 System Prompt
+                String systemPrompt = buildSystemPrompt(availableTools, memoryHistory, roundHistory);
 
                 // 3.2 调用 LLM
-                String currentMessage = (iteration == 0) ? userMessage :
-                    "请根据上面的工具返回结果，继续分析并给出最终答案。";
+                String userTurn = (step == 0)
+                    ? userMessage
+                    : "请根据上面的工具返回结果，继续分析并给出最终答案。";
 
-                String llmResponse = llmService.chat(systemPrompt, currentMessage);
-                log.info("LLM Response: {}", llmResponse);
+                String llmResponse = llmService.chat(systemPrompt, userTurn);
+                log.debug("[ReAct] step={} llmResponse={}", step, llmResponse);
 
-                // 推送思考过程
-                sendEvent(emitter, AgentStreamEvent.thinking("💭 " + llmResponse));
+                // 3.3 解析并推送 <thinking> 标签
+                String thinkingContent = extractThinking(llmResponse);
+                if (!thinkingContent.isEmpty()) {
+                    sendEvent(emitter, AgentStreamEvent.thinking("🧠 " + thinkingContent));
+                }
 
-                // 3.3 解析 LLM 响应
-                ParsedResponse parsed = parseLLMResponse(llmResponse);
+                // 去掉 <thinking> 块，得到动作部分
+                String actionPart = removeThinking(llmResponse);
 
+                // 3.4 解析动作
+                ParsedResponse parsed = parseLLMResponse(actionPart);
+
+                // ── FINAL_ANSWER ─────────────────────────────────────────
                 if (parsed.isFinalAnswer()) {
-                    // 找到最终答案
-                    sendEvent(emitter, AgentStreamEvent.finalAnswer(parsed.getAnswer()));
+                    String answer = parsed.getAnswer();
+
+                    // 保存 AI 回复到 Redis
+                    chatMemoryStore.addMessage(sessionId, Message.assistant(answer));
+
+                    // 异步触发记忆摘要（不阻塞 SSE）
+                    memorySummarizer.summarizeIfNeeded(sessionId);
+
+                    sendEvent(emitter, AgentStreamEvent.finalAnswer(answer));
                     taskCompleted = true;
                     break;
                 }
 
+                // ── TOOL_CALL ─────────────────────────────────────────────
                 if (parsed.isHasToolCall()) {
-                    // 需要调用工具
                     ToolCall toolCall = parsed.getToolCall();
-
-                    // 推送工具调用事件
                     String toolArgsJson = objectMapper.writeValueAsString(toolCall.getArguments());
+
                     sendEvent(emitter, AgentStreamEvent.toolCall(toolCall.getName(), toolArgsJson));
 
-                    // 执行工具调用
-                    String toolResult = executeToolCall(toolCall);
+                    // 执行工具（区分内建/动态/远程）
+                    String toolResult = dispatchToolCall(toolCall);
 
-                    // 推送工具结果事件
+                    // ── 防死循环检测 ──────────────────────────────────────
+                    if (toolResult.startsWith("Error:")) {
+                        String errorKey = toolCall.getName() + "|" + toolArgsJson;
+
+                        if (errorKey.equals(lastErrorKey)) {
+                            repeatErrorCount++;
+                        } else {
+                            lastErrorKey    = errorKey;
+                            repeatErrorCount = 1;
+                        }
+
+                        if (repeatErrorCount >= 2) {
+                            // 注入系统警告，强制 LLM 换策略
+                            String sysWarning =
+                                "【系统警告】你陷入了重复的错误执行路径（连续 " + repeatErrorCount +
+                                " 次对工具 '" + toolCall.getName() +
+                                "' 产生相同错误）。请立即使用完全不同的策略，" +
+                                "或调用 create_tool 编写新工具，或直接向用户求助。";
+
+                            sendEvent(emitter, AgentStreamEvent.warning(sysWarning));
+                            toolResult = sysWarning;
+                            repeatErrorCount = 0; // 重置，给 LLM 一次改正机会
+                        }
+                    } else {
+                        // 执行成功，重置错误计数
+                        lastErrorKey    = null;
+                        repeatErrorCount = 0;
+                    }
+
                     sendEvent(emitter, AgentStreamEvent.toolResult(toolCall.getName(), toolResult));
 
-                    // 更新对话历史
-                    conversationHistory.add("Tool Call: " + toolCall.getName() +
-                        " with args: " + toolCall.getArguments());
-                    conversationHistory.add("Observation: " + toolResult);
+                    // 更新本轮历史和工具列表（动态工具可能新增）
+                    roundHistory.add("Tool Call: " + toolCall.getName()
+                        + " args=" + toolArgsJson);
+                    roundHistory.add("Observation: " + toolResult);
+
+                    // 刷新可用工具（create_tool 可能注册了新工具）
+                    availableTools = buildAvailableTools();
+
                 } else {
-                    // LLM 没有明确指示
-                    conversationHistory.add("Agent: " + llmResponse);
+                    // LLM 输出了纯文本（中间思考），记入历史继续
+                    roundHistory.add("Agent: " + actionPart);
                 }
             }
 
-            // 4. 检查是否完成
+            // ── 熔断器触发 ───────────────────────────────────────────────
             if (!taskCompleted) {
-                sendEvent(emitter, AgentStreamEvent.error("达到最大迭代次数，无法完成任务"));
+                String circuitMsg = "⚡ 熔断器触发：已达最大步数 " + MAX_STEPS +
+                    " 步，强制退出。请简化任务或拆分后重试。";
+                log.warn("[ReAct] circuit breaker triggered for session={}", sessionId);
+                sendEvent(emitter, AgentStreamEvent.error(circuitMsg));
             }
 
-            // 5. 推送完成事件
             sendEvent(emitter, AgentStreamEvent.done());
             emitter.complete();
 
         } catch (Exception e) {
-            log.error("Error in streaming ReAct execution", e);
+            log.error("[ReAct] fatal error for session={}", sessionId, e);
             try {
                 sendEvent(emitter, AgentStreamEvent.error("执行出错: " + e.getMessage()));
                 emitter.complete();
-            } catch (Exception ignored) {
-                // Emitter 可能已关闭
-            }
+            } catch (Exception ignored) { }
         }
     }
 
+    // ========== 工具分发（内建 → 动态 → 远程）==========
+
     /**
-     * 发送 SSE 事件
+     * 工具调用分发器
+     * 优先级：ToolCreatorTool > DynamicToolRegistry > RemoteToolExecutor
      */
-    private void sendEvent(SseEmitter emitter, AgentStreamEvent event) {
+    private String dispatchToolCall(ToolCall toolCall) {
+        String name = toolCall.getName();
+        Map<String, Object> args = toolCall.getArguments();
+
         try {
-            String jsonData = objectMapper.writeValueAsString(event);
-            emitter.send(SseEmitter.event()
-                .data(jsonData)
-                .name("agent-event"));
-            log.debug("Sent event: {}", event.type());
-        } catch (IOException e) {
-            log.error("Failed to send SSE event", e);
-            throw new RuntimeException("Failed to send event", e);
+            // 1. 内建 ToolCreatorTool
+            if (ToolCreatorTool.TOOL_NAME.equals(name)) {
+                log.info("[ReAct] dispatching to ToolCreatorTool");
+                return toolCreatorTool.execute(args);
+            }
+
+            // 2. 动态 Groovy 工具
+            if (dynamicToolRegistry.hasTool(name)) {
+                log.info("[ReAct] dispatching to DynamicGroovyTool: {}", name);
+                return dynamicToolRegistry.executeTool(name, args);
+            }
+
+            // 3. 远程工具（SSE 实例）
+            log.info("[ReAct] dispatching to RemoteToolExecutor: {}", name);
+            return remoteToolExecutor.executeRemoteTool(name, args);
+
+        } catch (Exception e) {
+            log.error("[ReAct] tool execution error: tool={}", name, e);
+            return "Error: " + e.getMessage();
         }
     }
 
+    // ========== System Prompt 构建 ==========
+
     /**
-     * 获取所有在线工具的元数据
+     * 构建完整的 System Prompt
+     *
+     * 包含：
+     * 1. Agent 角色定义 + 强制自举指令
+     * 2. 记忆历史（滑动窗口 + 摘要）
+     * 3. 工具列表（静态 + 动态）
+     * 4. 协议规范（强制 <thinking> 标签）
+     * 5. 熔断与防循环规则
      */
-    private List<ToolMetadata> getAvailableTools() {
-        List<ServiceInstance> onlineInstances = instanceRegistry.getOnlineInstances();
+    private String buildSystemPrompt(
+        List<ToolMetadata> tools,
+        List<Message> memoryHistory,
+        List<String> roundHistory
+    ) {
+        StringBuilder sb = new StringBuilder();
+
+        // ── 1. 角色定义与核心原则 ─────────────────────────────────────────
+        sb.append("""
+            # 角色
+            你是 Nanobot，一个拥有自我编程能力的工业级 ReAct Agent。
+
+            # 核心原则
+            1. 你必须逐步推理，每次只执行一个动作（TOOL_CALL 或 FINAL_ANSWER）。
+            2. **严禁回答"我做不到"**。若现有工具无法完成任务，你必须调用 `create_tool`，
+               用 Groovy 编写新工具并立即使用。
+            3. 遇到工具报错时，必须先用 <thinking> 反思原因，再换策略，禁止无脑重试。
+
+            """);
+
+        // ── 2. 历史记忆（多轮上下文）─────────────────────────────────────
+        if (!memoryHistory.isEmpty()) {
+            sb.append("# 历史记忆（最近几轮对话摘要）\n");
+            for (Message msg : memoryHistory) {
+                String label = switch (msg.getRole()) {
+                    case "system"    -> "【摘要】";
+                    case "user"      -> "【用户】";
+                    case "assistant" -> "【助手】";
+                    default          -> "【" + msg.getRole() + "】";
+                };
+                sb.append(label).append(" ").append(msg.getContent()).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        // ── 3. 可用工具列表 ───────────────────────────────────────────────
+        sb.append("# 可用工具\n");
+        for (ToolMetadata tool : tools) {
+            sb.append("- **").append(tool.getName()).append("**：")
+              .append(tool.getDescription()).append("\n");
+            sb.append("  参数格式：").append(tool.getParameterSchema()).append("\n");
+        }
+        sb.append("\n");
+
+        // ── 4. 严格输出协议 ───────────────────────────────────────────────
+        sb.append("""
+            # 输出协议（严格遵守）
+
+            ## 每一步必须先输出思考
+            在任何 TOOL_CALL 或 FINAL_ANSWER 之前，必须先输出：
+            ```
+            <thinking>
+            [你的推理过程：分析当前状态、选择工具的理由、上一步错误的反思]
+            </thinking>
+            ```
+
+            ## 调用工具
+            ```
+            TOOL_CALL: {"name": "工具名", "args": {参数字典}}
+            ```
+
+            ## 给出最终答案
+            ```
+            FINAL_ANSWER: 你的完整答案
+            ```
+
+            ## 禁止事项
+            - 禁止在一次输出中同时出现多个 TOOL_CALL
+            - 禁止省略 <thinking> 标签
+            - 禁止输出"我无法..."、"我做不到..."等放弃语句
+
+            """);
+
+        // ── 5. 本轮对话历史 ───────────────────────────────────────────────
+        if (roundHistory.size() > 1) { // 第一条是 User 消息，已在 userTurn 传入
+            sb.append("# 本轮执行记录\n");
+            for (int i = 1; i < roundHistory.size(); i++) {
+                sb.append(roundHistory.get(i)).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        sb.append("请根据以上信息，输出你的 <thinking> 和下一步动作。");
+
+        return sb.toString();
+    }
+
+    // ========== 工具列表构建 ==========
+
+    /**
+     * 合并远程工具 + ToolCreatorTool + 动态工具
+     */
+    private List<ToolMetadata> buildAvailableTools() {
         List<ToolMetadata> tools = new ArrayList<>();
 
-        for (ServiceInstance instance : onlineInstances) {
-            if (instance.getTools() != null) {
-                for (ServiceInstance.ToolInfo toolInfo : instance.getTools()) {
-                    tools.add(new ToolMetadata(
-                        toolInfo.getName(),
-                        toolInfo.getDescription(),
-                        toolInfo.getParameterSchema(),
-                        instance.getAddress()
-                    ));
-                }
+        // 1. 远程工具（已注册的 SSE 实例）
+        for (ServiceInstance instance : instanceRegistry.getOnlineInstances()) {
+            if (instance.getTools() == null) continue;
+            for (ServiceInstance.ToolInfo info : instance.getTools()) {
+                tools.add(new ToolMetadata(
+                    info.getName(),
+                    info.getDescription(),
+                    info.getParameterSchema(),
+                    instance.getAddress()
+                ));
             }
         }
 
-        log.info("Found {} available tools from {} online instances",
-                 tools.size(), onlineInstances.size());
+        // 2. 内建 ToolCreatorTool（始终注入）
+        ToolCreatorTool.ToolMetadata creatorMeta = toolCreatorTool.getMetadata();
+        tools.add(new ToolMetadata(
+            creatorMeta.name,
+            creatorMeta.description,
+            creatorMeta.parameterSchema,
+            "internal"
+        ));
+
+        // 3. 已注册的动态工具
+        for (String toolName : dynamicToolRegistry.getAllToolNames()) {
+            var dynamicTool = dynamicToolRegistry.getTool(toolName);
+            tools.add(new ToolMetadata(
+                toolName,
+                dynamicTool.getDescription(),
+                "{}",
+                "dynamic"
+            ));
+        }
+
+        log.info("[ReAct] available tools: {}", tools.stream().map(ToolMetadata::getName).toList());
         return tools;
     }
 
-    /**
-     * 动态构建 Prompt
-     */
-    private String buildDynamicPrompt(List<ToolMetadata> tools, List<String> history) {
-        StringBuilder prompt = new StringBuilder();
+    // ========== <thinking> 解析 ==========
 
-        prompt.append("你是一个智能助手，可以使用以下工具来帮助用户：\n\n");
-
-        // 动态注入工具列表
-        prompt.append("可用工具：\n");
-        for (ToolMetadata tool : tools) {
-            prompt.append("- 工具名称: ").append(tool.getName()).append("\n");
-            prompt.append("  描述: ").append(tool.getDescription()).append("\n");
-            prompt.append("  参数格式: ").append(tool.getParameterSchema()).append("\n\n");
+    private String extractThinking(String response) {
+        Matcher m = THINKING_PATTERN.matcher(response);
+        if (m.find()) {
+            return m.group(1).trim();
         }
-
-        prompt.append("\n使用规则：\n");
-        prompt.append("1. 仔细分析用户的请求\n");
-        prompt.append("2. 如果需要使用工具，请严格按照以下格式输出（必须在一行内）：\n");
-        prompt.append("   TOOL_CALL: {\"name\": \"工具名\", \"args\": {参数字典}}\n");
-        prompt.append("3. 当你获得工具返回结果后，如果可以回答用户问题，请按以下格式输出最终答案：\n");
-        prompt.append("   FINAL_ANSWER: 你的答案\n");
-        prompt.append("4. 注意：每次只输出一个TOOL_CALL或FINAL_ANSWER，不要同时输出多个\n\n");
-
-        // 添加对话历史
-        if (!history.isEmpty()) {
-            prompt.append("对话历史：\n");
-            for (String entry : history) {
-                prompt.append(entry).append("\n");
-            }
-            prompt.append("\n");
-        }
-
-        prompt.append("现在请分析用户的请求并决定下一步行动。");
-
-        return prompt.toString();
+        return "";
     }
 
-    /**
-     * 解析 LLM 响应
-     */
+    private String removeThinking(String response) {
+        return THINKING_PATTERN.matcher(response).replaceAll("").trim();
+    }
+
+    // ========== LLM 响应解析 ==========
+
     private ParsedResponse parseLLMResponse(String response) {
         ParsedResponse parsed = new ParsedResponse();
 
@@ -229,38 +431,31 @@ public class StreamingGenericReActAgent {
                 String jsonPart = response.substring(
                     response.indexOf(TOOL_CALL_MARKER) + TOOL_CALL_MARKER.length()
                 ).trim();
-                JsonNode node = objectMapper.readTree(jsonPart);
 
+                // 只截取第一个 JSON 对象（防止 LLM 输出多余内容）
+                jsonPart = extractFirstJson(jsonPart);
+
+                JsonNode node = objectMapper.readTree(jsonPart);
                 ToolCall toolCall = new ToolCall();
                 toolCall.setName(node.get("name").asText());
 
-                Map<String, Object> args = new HashMap<>();
+                Map<String, Object> args = new LinkedHashMap<>();
                 JsonNode argsNode = node.get("args");
                 if (argsNode != null) {
                     argsNode.fields().forEachRemaining(entry -> {
-                        JsonNode valueNode = entry.getValue();
-                        Object value;
-
-                        // 根据 JSON 类型保留原始类型
-                        if (valueNode.isNumber()) {
-                            value = valueNode.numberValue();
-                        } else if (valueNode.isBoolean()) {
-                            value = valueNode.booleanValue();
-                        } else if (valueNode.isNull()) {
-                            value = null;
-                        } else {
-                            value = valueNode.asText();
-                        }
-
-                        args.put(entry.getKey(), value);
+                        JsonNode v = entry.getValue();
+                        if (v.isNumber())      args.put(entry.getKey(), v.numberValue());
+                        else if (v.isBoolean()) args.put(entry.getKey(), v.booleanValue());
+                        else if (v.isNull())    args.put(entry.getKey(), null);
+                        else                    args.put(entry.getKey(), v.asText());
                     });
                 }
                 toolCall.setArguments(args);
-
                 parsed.setHasToolCall(true);
                 parsed.setToolCall(toolCall);
+
             } catch (Exception e) {
-                log.error("Failed to parse tool call", e);
+                log.error("[ReAct] failed to parse tool call", e);
             }
         }
 
@@ -268,18 +463,38 @@ public class StreamingGenericReActAgent {
     }
 
     /**
-     * 执行工具调用
+     * 从字符串中提取第一个完整 JSON 对象（防止 LLM 在 JSON 后附加说明文字）
      */
-    private String executeToolCall(ToolCall toolCall) {
+    private String extractFirstJson(String text) {
+        int depth = 0;
+        int start = text.indexOf('{');
+        if (start == -1) return text;
+
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) return text.substring(start, i + 1);
+            }
+        }
+        return text;
+    }
+
+    // ========== SSE 推流 ==========
+
+    private void sendEvent(SseEmitter emitter, AgentStreamEvent event) {
         try {
-            return remoteToolExecutor.executeRemoteTool(toolCall.getName(), toolCall.getArguments());
-        } catch (Exception e) {
-            log.error("Tool execution failed", e);
-            return "Error: " + e.getMessage();
+            String json = objectMapper.writeValueAsString(event);
+            emitter.send(SseEmitter.event().data(json).name("agent-event"));
+            log.debug("[SSE] sent event type={}", event.type());
+        } catch (IOException e) {
+            log.error("[SSE] failed to send event", e);
+            throw new RuntimeException("SSE send failed", e);
         }
     }
 
-    // ========== 数据类 ==========
+    // ========== 内部数据类 ==========
 
     @Data
     private static class ToolMetadata {
