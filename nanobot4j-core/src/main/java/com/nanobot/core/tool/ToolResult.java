@@ -1,6 +1,5 @@
 package com.nanobot.core.tool;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -9,7 +8,6 @@ import lombok.NoArgsConstructor;
  */
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class ToolResult {
 
     /**
@@ -26,6 +24,12 @@ public class ToolResult {
      * 错误消息（如果失败）
      */
     private String error;
+
+    public ToolResult(boolean success, Object data, String error) {
+        this.success = success;
+        this.data = data;
+        this.error = error;
+    }
 
     /**
      * 创建成功结果

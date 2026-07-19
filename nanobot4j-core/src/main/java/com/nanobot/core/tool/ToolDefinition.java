@@ -1,6 +1,5 @@
 package com.nanobot.core.tool;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -9,7 +8,6 @@ import lombok.NoArgsConstructor;
  */
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class ToolDefinition {
 
     /**
@@ -31,6 +29,13 @@ public class ToolDefinition {
      * 工具实例
      */
     private Tool tool;
+
+    public ToolDefinition(String name, String description, String parameterSchema, Tool tool) {
+        this.name = name;
+        this.description = description;
+        this.parameterSchema = parameterSchema;
+        this.tool = tool;
+    }
 
     /**
      * 从 Tool 实例创建定义
