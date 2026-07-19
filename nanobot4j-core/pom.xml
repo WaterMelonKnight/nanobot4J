@@ -9,6 +9,7 @@
         <groupId>com.nanobot</groupId>
         <artifactId>nanobot4j-parent</artifactId>
         <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom-parent.xml</relativePath>
     </parent>
 
     <artifactId>nanobot4j-core</artifactId>

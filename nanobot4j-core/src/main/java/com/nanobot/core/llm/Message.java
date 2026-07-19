@@ -1,6 +1,5 @@
 package com.nanobot.core.llm;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -9,7 +8,6 @@ import lombok.NoArgsConstructor;
  */
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class Message {
 
     /**
@@ -31,6 +29,13 @@ public class Message {
      * 工具名称（如果是 tool 角色）
      */
     private String toolName;
+
+    public Message(String role, String content, String toolCallId, String toolName) {
+        this.role = role;
+        this.content = content;
+        this.toolCallId = toolCallId;
+        this.toolName = toolName;
+    }
 
     public static Message system(String content) {
         return new Message("system", content, null, null);
